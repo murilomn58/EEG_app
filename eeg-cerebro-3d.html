@@ -77,6 +77,32 @@
   }
   #zoom-banda button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
   #zoom-banda button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+  /* Navegação na série temporal — só faz sentido com dado real tocando,
+     por isso nasce desabilitada e o JS habilita quando a gravação chega. */
+  #posicao-gravacao { display: none; margin: 9px 0; padding: 8px 9px; border-radius: 6px;
+    background: rgba(154,166,191,0.05); border: 1px solid rgba(154,166,191,0.14); }
+  body.somente-sinais #posicao-gravacao { display: block; }
+  #posicao-gravacao > label { display: block; font-size: 10.5px; color: var(--ink-dim); margin-bottom: 6px; }
+  #posicao-valor { color: var(--ink); font-variant-numeric: tabular-nums; }
+  #posicao-slider { width: 100%; margin: 0 0 7px; }
+  #posicao-slider:disabled { opacity: 0.35; }
+  #posicao-acoes { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+  #posicao-campo {
+    font-family: inherit; font-size: 10.5px; width: 66px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink); border-radius: 5px; padding: 3px 6px;
+  }
+  #posicao-acoes button {
+    font-family: inherit; font-size: 10px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 3px 7px; cursor: pointer; transition: all 0.15s;
+  }
+  #posicao-acoes button:hover:not(:disabled) { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #posicao-acoes button:disabled, #posicao-campo:disabled { opacity: 0.35; cursor: default; }
+  #posicao-evento { border-color: rgba(120,180,255,0.28) !important; }
+  #posicao-evento:hover:not(:disabled) { background: rgba(120,180,255,0.14) !important; color: #cfe3ff !important; }
+  #posicao-dica { margin: 6px 0 0; font-size: 9.5px; color: var(--ink-dim); line-height: 1.45; min-height: 1.2em; }
+
   #zoom-canais-acoes { display: flex; gap: 6px; margin-bottom: 8px; }
   #zoom-canais-acoes button {
     font-family: inherit; font-size: 10px;
@@ -284,6 +310,16 @@
           <span id="tempo-selecionado-label"></span>
           <button id="tempo-selecionado-voltar">Voltar ao vivo</button>
         </div>
+        <div id="posicao-gravacao">
+          <label for="posicao-slider">posição na gravação: <span id="posicao-valor">—</span></label>
+          <input type="range" id="posicao-slider" min="0" max="100" step="0.05" value="0" disabled>
+          <div id="posicao-acoes">
+            <input type="number" id="posicao-campo" step="0.1" min="0" placeholder="seg" disabled>
+            <button id="posicao-ir" disabled>Ir para</button>
+            <button id="posicao-evento" disabled title="Salta para o próximo instante em que muitos canais desviam ao mesmo tempo">⚡ Próximo evento</button>
+          </div>
+          <p id="posicao-dica">Toque um sujeito em "Tocar dado real" na janela principal para navegar na série temporal.</p>
+        </div>
         <div id="zoom-canais-acoes">
           <button id="zoom-marcar-todos">Marcar todos</button>
           <button id="zoom-desmarcar-todos">Desmarcar todos</button>
@@ -456,7 +492,15 @@ function dirEsfera(thetaDeg, phiDeg) {
 // 2. FILTROS DE BANDA — biquad passa-faixa real por canal, envelope RMS
 //    por média exponencial. Decide quem "carrega" a banda por medição.
 // =========================================================================
-const FS = 500;
+// 128 Hz = a taxa REAL de adhdata.csv, e agora também a taxa em que o
+// buffer é alimentado (ver PASSO_SINAL_S no loop). Antes isto era 500,
+// herdado de quando o sinal era só sintético e o buffer recebia uma
+// amostra por frame (~19 amostras de sinal por segundo, na prática):
+// os biquads eram projetados pra uma taxa que não existia em lugar
+// nenhum, então "Beta 13–30Hz" e "Gamma 30–45Hz" não isolavam essas
+// faixas — estavam acima do Nyquist da taxa efetiva e voltavam como
+// alias. Com FS=128 o Nyquist é 64Hz e as cinco bandas cabem inteiras.
+const FS = 128;
 const BANDAS = { delta: [1, 4], theta: [4, 8], alpha: [8, 13], beta: [13, 30], gamma: [30, 45] };
 let bandaAtiva = "alpha";
 
@@ -523,6 +567,21 @@ const PESO_LOBO_BANDA = {
 let fonteExterna = null;
 let tGlobal = 0;
 
+// tGlobal é o relógio interno (sobe desde que a página abriu). Quando há
+// gravação tocando, o que o clínico quer ver é o tempo DENTRO da
+// gravação — é o que o eixo dos traçados e o rótulo do instante travado
+// mostram. Estas duas variáveis são o espelho mínimo disso, declaradas
+// aqui em cima porque a janela "só sinais" também precisa delas e o
+// controle de posição só é montado bem mais abaixo no script.
+let offsetGravacao = null; // null = sinal sintético, eixo mostra tGlobal cru
+let duracaoGravacao = 0;
+
+function tempoDeGravacao(t) {
+  if (offsetGravacao === null || duracaoGravacao <= 0) return t;
+  const d = (t - offsetGravacao) % duracaoGravacao;
+  return d < 0 ? d + duracaoGravacao : d;
+}
+
 function amostraSintetica(nome, t) {
   const lobo = loboDe(nome);
   let v = 0;
@@ -536,11 +595,11 @@ function amostraSintetica(nome, t) {
   return v;
 }
 
-// 1200 (não 600) pra garantir folga real acima da maior janela do
-// formato clínico (30s) — com 600 o buffer só cobria ~32s no MELHOR
-// caso, então qualquer variação de frame rate deixava a janela de 30s
-// parcialmente vazia (lido como "tela cortada").
-const N_HIST = 1200;
+// Agora o buffer recebe 128 amostras por segundo de sinal (uma por
+// passo de 1/FS), não uma por frame — então a conta é direta: 4096
+// amostras = 32s de gravação, com folga sobre a maior janela do formato
+// clínico (30s). Antes eram 1200 amostras a ~19/s pelo mesmo motivo.
+const N_HIST = 4096;
 const historico = {};
 for (const c of CANAIS_19) historico[c] = new Float32Array(N_HIST);
 let ponteiroHist = 0;
@@ -566,7 +625,7 @@ function aplicarTempoPausado(tempo, pausadoNovo) {
   btnPausaEl.classList.toggle("ativo", pausado);
 
   const preso = tempoSelecionado !== null;
-  const rotulo = preso ? `Analisando t=${tempoSelecionado.toFixed(1)}s (pausado)` : "";
+  const rotulo = preso ? `Analisando t=${tempoDeGravacao(tempoSelecionado).toFixed(1)}s (pausado)` : "";
   hudTempoSelecionadoEl.style.display = preso ? "flex" : "none";
   hudTempoLabelEl.textContent = rotulo;
   tempoSelecionadoInfoEl.classList.toggle("ativo", preso);
@@ -647,7 +706,7 @@ function commitAmostras(referenciados, tempoAtual) {
   atualizarRelevancias();
 }
 
-function passoSinal(dt) {
+function passoSinal(dt, lote) {
   if (pausado) return;
   tGlobal += dt;
 
@@ -668,7 +727,9 @@ function passoSinal(dt) {
   }
 
   commitAmostras(referenciados, tGlobal);
-  if (canalSinais && !somenteSinais) canalSinais.postMessage({ tipo: "amostra", referenciados, tGlobal });
+  // o envio pra janela "só sinais" é agrupado por frame pelo chamador
+  // (ver animar); aqui só empilhamos no lote que ele passou.
+  if (lote) lote.push({ referenciados, tGlobal });
 }
 
 if (canalSinais && !somenteSinais) {
@@ -708,6 +769,14 @@ if (canalSinais && !somenteSinais) {
       // principal controla pausado/passoSinal de verdade.
       aplicarTempoPausado(ev.data.tempo, ev.data.pausado);
       canalSinais.postMessage({ tipo: "tempo-pausado", tempo: ev.data.tempo, pausado: ev.data.pausado });
+    } else if (ev.data.tipo === "definir-posicao") {
+      // salto na série temporal pedido pela popup — só a principal tem a
+      // gravação carregada. irParaTempo já publica o estado de volta.
+      irParaTempo(ev.data.tempo);
+    } else if (ev.data.tipo === "pedir-proximo-evento") {
+      proximoEvento();
+    } else if (ev.data.tipo === "pedir-gravacao") {
+      publicarGravacao();
     }
   };
 }
@@ -715,8 +784,8 @@ if (canalSinais && !somenteSinais) {
 if (canalSinais && somenteSinais) {
   canalSinais.onmessage = (ev) => {
     if (!ev.data) return;
-    if (ev.data.tipo === "amostra") {
-      commitAmostras(ev.data.referenciados, ev.data.tGlobal);
+    if (ev.data.tipo === "amostras") {
+      for (const a of ev.data.lote) commitAmostras(a.referenciados, a.tGlobal);
     } else if (ev.data.tipo === "historico-completo") {
       for (const c of CANAIS_19) historico[c].set(ev.data.historico[c]);
       for (const c of CANAIS_19) {
@@ -731,9 +800,12 @@ if (canalSinais && somenteSinais) {
       aplicarVelocidadeUI(ev.data.valor);
     } else if (ev.data.tipo === "tempo-pausado") {
       aplicarTempoPausado(ev.data.tempo, ev.data.pausado);
+    } else if (ev.data.tipo === "gravacao") {
+      aplicarInfoGravacaoUI(ev.data.info);
     }
   };
   canalSinais.postMessage({ tipo: "pedir-historico" });
+  canalSinais.postMessage({ tipo: "pedir-gravacao" });
 }
 function valorAtual(nome) {
   const idx = (ponteiroHist - 1 + N_HIST) % N_HIST;
@@ -1048,7 +1120,7 @@ function desenharTracosClinico() {
     ctxT.stroke();
     ctxT.setLineDash([]);
     ctxT.fillStyle = "#7f8ba1";
-    ctxT.fillText(String(Math.round(s)), x, margemTopo / 2 + 2);
+    ctxT.fillText(String(Math.round(tempoDeGravacao(s))), x, margemTopo / 2 + 2);
   }
 
   const nCanais = canais.length;
@@ -1922,6 +1994,10 @@ const selectDadoRealSujeito = document.getElementById("dado-real-sujeito");
 const btnDadoRealTocar = document.getElementById("dado-real-tocar");
 const dadoRealStatusEl = document.getElementById("dado-real-status");
 let tocandoDadoReal = false;
+// Gravação carregada no momento (null = sintético). Guarda os arrays
+// inteiros que vieram do /raw-data, então navegar no tempo é local e
+// instantâneo: nenhum request novo.
+let gravacaoAtual = null;
 
 function carregarSujeitosDadoReal() {
   if (sujeitosDadoRealCarregados) return;
@@ -1950,9 +2026,11 @@ if (btnDadoRealTocar) {
     if (tocandoDadoReal) {
       window.clearEEGData();
       tocandoDadoReal = false;
+      gravacaoAtual = null;
       btnDadoRealTocar.textContent = "Tocar dado real";
       btnDadoRealTocar.classList.remove("ativo");
       dadoRealStatusEl.textContent = "";
+      publicarGravacao();
       return;
     }
 
@@ -1970,11 +2048,23 @@ if (btnDadoRealTocar) {
       })
       .then((dados) => {
         const fsReal = dados.fs;
-        const inicioReal = tGlobal;
+        const nAmostras = (dados.channels[CANAIS_19[0]] || []).length;
+        // offsetReal é o t da gravação que corresponde ao tGlobal atual.
+        // Saltar na série temporal é só reescrever isto — o resto do
+        // pipeline (referência, filtro, buffer, 3D) não muda em nada.
+        gravacaoAtual = {
+          sujeito, fs: fsReal, nAmostras,
+          duracao: nAmostras / fsReal,
+          canais: dados.channels,
+          offsetReal: tGlobal,
+          eventos: null, // calculado sob demanda no primeiro "próximo evento"
+        };
         window.setEEGData((canal, t) => {
-          const arr = dados.channels[canal];
+          const g = gravacaoAtual;
+          if (!g) return 0;
+          const arr = g.canais[canal];
           if (!arr || !arr.length) return 0;
-          let idx = Math.floor((t - inicioReal) * fsReal) % arr.length;
+          let idx = Math.floor((t - g.offsetReal) * g.fs) % arr.length;
           if (idx < 0) idx += arr.length;
           return arr[idx];
         });
@@ -1982,6 +2072,7 @@ if (btnDadoRealTocar) {
         btnDadoRealTocar.textContent = "Parar dado real";
         btnDadoRealTocar.classList.add("ativo");
         dadoRealStatusEl.textContent = `Tocando ${sujeito} (dado real, ${fsReal}Hz) — repete ao chegar no fim.`;
+        publicarGravacao();
       })
       .catch((err) => {
         dadoRealStatusEl.textContent = "Erro ao carregar dado real: " + err.message;
@@ -1989,6 +2080,202 @@ if (btnDadoRealTocar) {
       });
   });
 }
+
+// =========================================================================
+// 15b. NAVEGAÇÃO NA SÉRIE TEMPORAL — "pular para t=X" na gravação.
+//    A gravação inteira já está na memória desde o /raw-data, e a fonte
+//    de sinal é uma função pura do tempo, então saltar é só reescrever
+//    gravacaoAtual.offsetReal: nada de request, nada de recarregar.
+//
+//    Como só a janela principal tem a gravação e roda passoSinal, a
+//    janela "só sinais" manda comando pela BroadcastChannel e recebe o
+//    eco — mesmo padrão comando+eco de velocidade e tempo travado.
+// =========================================================================
+const posicaoSliderEl = document.getElementById("posicao-slider");
+const posicaoValorEl = document.getElementById("posicao-valor");
+const posicaoCampoEl = document.getElementById("posicao-campo");
+const posicaoIrEl = document.getElementById("posicao-ir");
+const posicaoEventoEl = document.getElementById("posicao-evento");
+const posicaoDicaEl = document.getElementById("posicao-dica");
+
+// Espelho do que a janela principal sabe da gravação — na principal é
+// derivado de gravacaoAtual; na "só sinais" chega pela BroadcastChannel.
+let infoGravacao = null;
+
+function posicaoAtualSeg() {
+  if (!gravacaoAtual) return 0;
+  const t = (tGlobal - gravacaoAtual.offsetReal) % gravacaoAtual.duracao;
+  return t < 0 ? t + gravacaoAtual.duracao : t;
+}
+
+// Manda pra janela "só sinais" o que ela precisa pra desenhar o controle
+// (duração, sujeito, posição). Chamado quando carrega/para uma gravação
+// e a cada salto.
+function publicarGravacao() {
+  const info = gravacaoAtual ? {
+    sujeito: gravacaoAtual.sujeito,
+    duracao: gravacaoAtual.duracao,
+    fs: gravacaoAtual.fs,
+    posicao: posicaoAtualSeg(),
+    offsetReal: gravacaoAtual.offsetReal, // pra "só sinais" rotular o eixo no tempo da gravação
+  } : null;
+  infoGravacao = info;
+  aplicarInfoGravacaoUI(info);
+  if (canalSinais && !somenteSinais) canalSinais.postMessage({ tipo: "gravacao", info });
+}
+
+function aplicarInfoGravacaoUI(info) {
+  infoGravacao = info;
+  // espelha no par que o eixo dos traçados usa (ver tempoDeGravacao)
+  offsetGravacao = info ? info.offsetReal : null;
+  duracaoGravacao = info ? info.duracao : 0;
+  const ativo = !!info;
+  posicaoSliderEl.disabled = !ativo;
+  posicaoCampoEl.disabled = !ativo;
+  posicaoIrEl.disabled = !ativo;
+  posicaoEventoEl.disabled = !ativo;
+
+  if (!ativo) {
+    posicaoValorEl.textContent = "—";
+    posicaoDicaEl.textContent = 'Toque um sujeito em "Tocar dado real" na janela principal para navegar na série temporal.';
+    return;
+  }
+  posicaoSliderEl.max = info.duracao.toFixed(2);
+  if (!arrastandoPosicao) posicaoSliderEl.value = info.posicao;
+  posicaoValorEl.textContent = `${info.posicao.toFixed(1)}s / ${info.duracao.toFixed(1)}s`;
+  posicaoDicaEl.textContent = `${info.sujeito} · ${info.duracao.toFixed(1)}s a ${info.fs}Hz. Solte o slider para pular; clique no traçado para travar o instante.`;
+}
+
+// O salto em si. Reposiciona a origem da gravação e limpa o buffer —
+// sem limpar, os 32s antigos continuariam desenhados à esquerda do
+// ponto novo, o que se lê como "o sinal deu um salto" em vez de "eu
+// mudei de trecho".
+function irParaTempo(tAlvo) {
+  if (!gravacaoAtual) return;
+  const t = Math.max(0, Math.min(gravacaoAtual.duracao - 0.01, tAlvo));
+  gravacaoAtual.offsetReal = tGlobal - t;
+  limparHistorico();
+  aplicarTempoPausado(null, false); // destrava: o instante antigo não existe mais no buffer
+  publicarGravacao();
+}
+
+function limparHistorico() {
+  for (const c of CANAIS_19) {
+    historico[c].fill(0);
+    for (const b of Object.keys(BANDAS)) historicoBanda[c][b].fill(0);
+  }
+  historicoTempo.fill(0);
+  ponteiroHist = 0;
+  totalAmostrasCommitadas = 0;
+}
+
+// --- detecção de evento global -----------------------------------------
+// Mesmo critério da varredura offline do dataset: z-score robusto por
+// canal (mediana/MAD, pra o próprio pico não inflar o desvio e se
+// esconder) e conta quantos canais estão extremos NA MESMA amostra.
+// Roda uma vez por gravação (~20k amostras x 19 canais) e fica em cache.
+function detectarEventos(g) {
+  const eventos = [];
+  const n = g.nAmostras;
+  if (!n) return eventos;
+
+  const z = [];
+  for (const c of CANAIS_19) {
+    const arr = g.canais[c];
+    if (!arr || arr.length < n) { z.push(null); continue; }
+    const ord = Float64Array.from(arr).sort();
+    const med = ord[ord.length >> 1];
+    const desv = new Float64Array(n);
+    for (let i = 0; i < n; i++) desv[i] = Math.abs(arr[i] - med);
+    desv.sort();
+    const mad = Math.max(1e-6, desv[n >> 1] * 1.4826);
+    z.push({ med, mad });
+  }
+
+  const LIMIAR_Z = 5, MIN_CANAIS = 12, DIST_MIN = Math.round(1.0 * g.fs);
+  let ultimo = -Infinity;
+  for (let i = 0; i < n; i++) {
+    let extremos = 0;
+    for (let k = 0; k < CANAIS_19.length; k++) {
+      const est = z[k];
+      if (!est) continue;
+      const v = g.canais[CANAIS_19[k]][i];
+      if (Math.abs((v - est.med) / est.mad) > LIMIAR_Z) extremos++;
+    }
+    if (extremos >= MIN_CANAIS && i - ultimo >= DIST_MIN) {
+      eventos.push({ t: i / g.fs, canais: extremos });
+      ultimo = i;
+    }
+  }
+  return eventos;
+}
+
+function proximoEvento() {
+  if (!gravacaoAtual) return;
+  const g = gravacaoAtual;
+  if (!g.eventos) {
+    posicaoDicaEl.textContent = "Varrendo a gravação…";
+    g.eventos = detectarEventos(g);
+  }
+  if (!g.eventos.length) {
+    posicaoDicaEl.textContent = "Nenhum evento global (≥12 canais extremos) nesta gravação.";
+    return;
+  }
+  const agora = posicaoAtualSeg();
+  // o primeiro depois da posição atual; se não houver, volta pro começo
+  const alvo = g.eventos.find((e) => e.t > agora + 0.5) || g.eventos[0];
+  // entra 1.5s ANTES do evento pra ele aparecer entrando na tela, não
+  // já no meio do traçado
+  irParaTempo(Math.max(0, alvo.t - 1.5));
+  posicaoDicaEl.textContent =
+    `Evento em t=${alvo.t.toFixed(2)}s (${alvo.canais}/19 canais extremos) — ` +
+    `${g.eventos.length} evento(s) na gravação. Entrando 1.5s antes.`;
+}
+
+let arrastandoPosicao = false;
+if (posicaoSliderEl) {
+  posicaoSliderEl.addEventListener("input", () => {
+    arrastandoPosicao = true;
+    const v = parseFloat(posicaoSliderEl.value);
+    if (infoGravacao) posicaoValorEl.textContent = `${v.toFixed(1)}s / ${infoGravacao.duracao.toFixed(1)}s`;
+  });
+  // só salta ao SOLTAR: arrastar limpando o buffer a cada pixel deixaria
+  // a tela piscando e recalcularia tudo dezenas de vezes por segundo
+  posicaoSliderEl.addEventListener("change", () => {
+    arrastandoPosicao = false;
+    pedirSalto(parseFloat(posicaoSliderEl.value));
+  });
+}
+if (posicaoIrEl) {
+  posicaoIrEl.addEventListener("click", () => {
+    const v = parseFloat(posicaoCampoEl.value);
+    if (Number.isFinite(v)) pedirSalto(v);
+  });
+  posicaoCampoEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") posicaoIrEl.click();
+  });
+}
+if (posicaoEventoEl) {
+  posicaoEventoEl.addEventListener("click", () => {
+    if (somenteSinais) {
+      if (canalSinais) canalSinais.postMessage({ tipo: "pedir-proximo-evento" });
+    } else {
+      proximoEvento();
+    }
+  });
+}
+
+// Na principal salta direto; na "só sinais" delega (ela não tem a
+// gravação nem roda passoSinal).
+function pedirSalto(t) {
+  if (somenteSinais) {
+    if (canalSinais) canalSinais.postMessage({ tipo: "definir-posicao", tempo: t });
+  } else {
+    irParaTempo(t);
+  }
+}
+
+aplicarInfoGravacaoUI(null);
 
 let rotacaoAtiva = true;
 document.getElementById("btn-rotacao").addEventListener("click", (e) => {
@@ -2057,14 +2344,16 @@ let jaCalculouPesos = false;
 // ponto da visualização (qual região está mais ativa que as outras).
 let picoAdaptativo = 1;
 
-// Acumulador fracionário de passos de simulação — é isto que faz a
-// velocidade ter efeito visível de verdade: multiplicar só o dt (tentativa
-// anterior) acelerava o "relógio" interno, mas o buffer sempre recebia
-// exatamente 1 amostra por frame (~60/s reais), então a ROLAGEM na tela
-// nunca mudava de ritmo. Agora velocidadeSinal controla quantos passos de
-// passoSinal rodam por frame: 2.0x roda 2 passos/frame (rolagem 2x mais
-// rápida), 0.2x roda 1 passo a cada ~5 frames (rolagem 5x mais lenta).
+// Cada passo de simulação avança EXATAMENTE 1/FS segundos (7.8125ms a
+// 128Hz), e o número de passos por frame vem do tempo real decorrido:
+// é isso que faz a taxa do buffer bater com a taxa pra qual os biquads
+// foram projetados. Antes o passo era dt*3.2 com 1 passo por frame, o
+// que dava ~19 amostras de sinal por segundo e desalinhava os filtros.
+// Consequência visível: 1.0x agora é tempo real de verdade (o dado de
+// 128Hz toca a 128Hz), onde antes corria ~3.2x mais rápido.
+const PASSO_SINAL_S = 1 / FS;
 let passosPendentes = 0;
+let ultimaPublicacaoPos = 0;
 
 function animar() {
   requestAnimationFrame(animar);
@@ -2073,10 +2362,24 @@ function animar() {
   ultimoT = agora;
 
   if (!somenteSinais) {
-    passosPendentes += velocidadeSinal;
+    passosPendentes += (dt * velocidadeSinal) / PASSO_SINAL_S;
+    // teto por frame: se a aba ficou em background e voltou, não vale
+    // tentar recuperar minutos de sinal num frame só — trava a página.
+    if (passosPendentes > 4 * FS) passosPendentes = 4 * FS;
+    const lote = [];
     while (passosPendentes >= 1) {
-      passoSinal(dt * 3.2);
+      passoSinal(PASSO_SINAL_S, lote);
       passosPendentes -= 1;
+    }
+    // uma mensagem por frame com o lote inteiro, em vez de uma por
+    // amostra: a 128Hz seriam 128 postMessage/s por canal aberto.
+    if (lote.length && canalSinais) canalSinais.postMessage({ tipo: "amostras", lote });
+
+    // posição da gravação ~2x/s: o bastante pro slider acompanhar sem
+    // virar mais uma mensagem por frame
+    if (gravacaoAtual && agora - ultimaPublicacaoPos > 500) {
+      ultimaPublicacaoPos = agora;
+      publicarGravacao();
     }
   }
   if (somenteSinais) {

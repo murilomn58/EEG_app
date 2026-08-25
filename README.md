@@ -38,6 +38,7 @@ It is built around a public dataset of **121 children (61 with ADHD, 60 controls
 | 🧠 **See power as anatomy** | Band power from all 19 electrodes is interpolated across a real brain mesh, updating live as the recording plays |
 | 🔬 **Reconstruct cortical sources** | A full MNE-Python forward/inverse pipeline estimates activity across **20,484 cortical vertices** — not electrode interpolation, but a geometrically grounded source estimate |
 | ⏸️ **Freeze an instant and study it** | Click any point in the trace to lock time; the 3D brain freezes on that exact sample ([details below](#the-time-lock-click-a-moment-study-it)) |
+| ⏭️ **Jump anywhere in the recording** | Seek to any second instantly, or let it find the next global event for you ([details below](#navigating-the-recording)) |
 | 📊 **Read the ADHD markers** | Four descriptive panels — TBR, spectral profile, synchronization matrix, Higuchi fractal dimension |
 | 🔀 **Re-reference on the fly** | Switch between native linked-ears (A1/A2), Cz, and common average reference (CAR) and watch the topography change |
 | 🎚️ **Isolate a rhythm** | Filter to delta, theta, alpha, beta, or gamma with real biquad filters and see only that band's spatial distribution |
@@ -75,6 +76,30 @@ sequenceDiagram
 Why it matters: a suspicious burst lasts a fraction of a second. Time-lock lets you stop *on* it, then switch bands, change the reference, or run a source reconstruction — all against that one frozen moment, instead of chasing it across a moving screen.
 
 ---
+
+## Navigating the recording
+
+Time-lock answers *"what is happening right now?"* — but a 155-second recording has one moment you care about and 154 seconds you don't. Waiting for playback to reach it is not analysis, it's patience.
+
+The **position controls** in the maximized signal window let you jump anywhere in the series instantly: drag the slider, or type the exact second and press **Ir para**. No reload, no new request — the full recording is already in memory from `/raw-data`, and the signal source is a pure function of time, so seeking is just moving the origin.
+
+![Position controls in the maximized signal window: slider, exact-second field, and the event jump button](docs/images/shot-07-time-navigation.png)
+
+### Finding what matters: ⚡ Próximo evento
+
+The button beside the field scans the whole recording for **global events** — instants where many channels deviate simultaneously — and jumps to the next one, entering 1.5 s early so you see it arrive rather than land mid-event.
+
+Detection uses a robust z-score per channel (median/MAD, so a large artifact cannot inflate the deviation that would reveal it) and flags samples where at least 12 of 19 channels exceed 5σ at once. Scanning a 155-second recording takes about **47 ms** in the browser.
+
+![A global event: all channels deflecting together, found automatically](docs/images/shot-08-global-event.png)
+
+Above, subject `v107` at **t = 45.9 s** — every channel deflecting in the same direction at the same instant, ±944 to ±2332 µV. That is 20–30× the subject's typical amplitude, which tells you exactly what it is: **not neural activity**, but a movement or reference artifact. Genuine cortical activity is never that large and never that globally synchronized.
+
+That is the honest use for this feature. It finds the moments that dominate your averages and distort your band power — so you can look at them, recognize them, and decide what to exclude.
+
+![The same event seen in the main window: traces jump together, the brain frozen on that instant](docs/images/shot-09-event-3d.png)
+
+Combined with time-lock, you jump to the event, freeze on it, and watch the whole 3D brain light up at once — which is precisely the visual signature of an artifact rather than a focal source. A real cortical generator lights a region; a movement artifact lights everything.
 
 ## Cortical source reconstruction
 
@@ -169,6 +194,8 @@ flowchart TB
 ```
 
 ### Signal path, from CSV row to colored vertex
+
+The buffer is fed at exactly **128 Hz** — one sample per 1/128 s step, matching the dataset and the rate the biquad filters are designed for. Playback at `1.0x` is therefore real time: a 155-second recording takes 155 seconds to play.
 
 ```mermaid
 flowchart LR
