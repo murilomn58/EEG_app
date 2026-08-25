@@ -220,8 +220,11 @@ The original dataset uses the older labels `T3/T4/T5/T6`. This project uses the 
 ```bash
 cd backend
 pip install -r requirements.txt
-python -m uvicorn app:app --port 8000
+python -m uvicorn app:app --port 8001
 ```
+
+> [!NOTE]
+> **Port 8001 is not optional.** The frontend has the backend URL hardcoded (`BACKEND_URL` in `eeg-cerebro-3d.html`). Serve it on any other port and the subject list stays empty and source reconstruction never runs — change the constant if you need a different port.
 
 First startup takes a few minutes: it downloads the fsaverage template and builds the forward and inverse operators. Subsequent runs are fast — everything is cached. Wait for:
 
