@@ -1,0 +1,23 @@
+# Dados brutos pesados (255 MB — acima do limite de 100 MB por arquivo do GitHub)
+adhdata.csv
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Ambiente / segredos (por precaução — hoje o projeto não usa nenhum)
+.env
+.env.*
+!.env.example
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

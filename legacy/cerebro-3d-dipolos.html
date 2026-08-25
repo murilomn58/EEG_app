@@ -1,0 +1,754 @@
+<meta charset="utf-8">
+<title>Cérebro 3D · dipolos EEG na montagem 10-20</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+
+<style>
+  :root {
+    --ground: #080b12;
+    --ground-deep: #05070c;
+    --line: rgba(154, 166, 191, 0.16);
+    --ink: #c8d2e4;
+    --ink-dim: #7f8ba1;
+    --ink-faint: #556075;
+
+    --frontal: #e8a33d;
+    --central: #3dbb6e;
+    --parietal: #6f8dd9;
+    --temporal: #d15a7a;
+    --occipital: #9a7fe0;
+    --meio: #9aa6bf;
+
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --serif: "Instrument Serif", Georgia, "Times New Roman", serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    overflow: hidden;
+  }
+
+  #palco {
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 120% 90% at 50% 45%, #0d1422 0%, var(--ground) 55%, var(--ground-deep) 100%);
+  }
+
+  body.retrato { background: #000; }
+  body.retrato #palco {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    height: 100vh;
+    width: calc(100vh * 9 / 16);
+    box-shadow: 0 0 0 1px rgba(154, 166, 191, 0.14);
+  }
+
+  body.retrato #titulo { top: 20px; left: 20px; max-width: 27ch; }
+  body.retrato #titulo h1 { font-size: 21px; }
+  body.retrato #titulo p { font-size: 9.5px; margin-top: 6px; }
+  body.retrato #numeros { top: 20px; right: 20px; font-size: 10px; }
+  body.retrato #legenda { bottom: 20px; left: 20px; }
+  body.retrato .dominio { font-size: 10.5px; padding: 1.5px 0; }
+  body.retrato #legenda hr { width: 132px; margin: 9px 0 8px; }
+  body.retrato #ajuda { display: none; }
+  body.retrato #banda { bottom: 20px; right: 20px; }
+
+  #tela { display: block; width: 100%; height: 100%; cursor: grab; }
+  #tela.arrastando { cursor: grabbing; }
+
+  .hud {
+    position: absolute;
+    pointer-events: none;
+    z-index: 2;
+    line-height: 1.45;
+  }
+
+  #titulo { top: 28px; left: 32px; max-width: 44ch; }
+  #titulo h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: clamp(23px, 3.2vw, 38px);
+    letter-spacing: 0.01em;
+    line-height: 1.06;
+    margin: 0;
+    color: #eef3fb;
+    text-wrap: balance;
+  }
+  #titulo p {
+    margin: 9px 0 0;
+    font-size: 11.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+  }
+  #titulo p.origem {
+    margin-top: 4px;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    color: var(--ink-faint);
+    font-size: 11px;
+  }
+
+  #numeros {
+    top: 30px; right: 32px;
+    text-align: right;
+    font-size: 11.5px;
+    letter-spacing: 0.05em;
+    color: var(--ink-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  #numeros b {
+    display: inline-block;
+    min-width: 2.4ch;
+    color: var(--ink);
+    font-weight: 600;
+  }
+
+  #legenda { bottom: 28px; left: 32px; }
+  .dominio {
+    display: flex;
+    align-items: baseline;
+    gap: 9px;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    padding: 2.5px 0;
+    color: var(--ink-dim);
+  }
+  .ponto { width: 8px; height: 8px; border-radius: 50%; flex: none; transform: translateY(-1px); }
+  .dominio b { color: var(--ink); font-weight: 500; }
+  .dominio i { font-style: normal; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+
+  #legenda hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0 10px; width: 200px; }
+
+  #metodo {
+    display: flex; align-items: center; gap: 9px;
+    font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.02em;
+    max-width: 220px;
+  }
+  .seta-legenda { flex: none; }
+
+  #ajuda { bottom: 28px; right: 32px; text-align: right; font-size: 11px; letter-spacing: 0.045em; color: var(--ink-faint); }
+  #ajuda kbd { font: inherit; color: var(--ink-dim); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px; margin-right: 2px; }
+
+  #banda {
+    bottom: 118px; right: 32px;
+    pointer-events: auto;
+    display: flex; gap: 6px;
+  }
+  #banda button {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    background: rgba(154,166,191,0.06);
+    border: 1px solid var(--line);
+    color: var(--ink-faint);
+    border-radius: 5px;
+    padding: 5px 10px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  #banda button:hover { color: var(--ink); border-color: rgba(154,166,191,0.32); }
+  #banda button.ativo { color: #eef3fb; background: rgba(154,166,191,0.14); border-color: rgba(154,166,191,0.4); }
+
+  #detalhe {
+    position: absolute;
+    z-index: 3;
+    pointer-events: none;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink);
+    background: rgba(10,14,22,0.92);
+    border: 1px solid rgba(154,166,191,0.22);
+    border-radius: 7px;
+    padding: 8px 11px;
+    max-width: 250px;
+    line-height: 1.55;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.1s;
+  }
+  #detalhe.visivel { opacity: 1; }
+  #detalhe b { color: #eef3fb; font-weight: 600; }
+  #detalhe .rot { color: var(--ink-faint); font-size: 10.5px; }
+
+  @media (max-width: 720px) {
+    #titulo { top: 20px; left: 20px; }
+    #legenda { bottom: 20px; left: 20px; }
+    #numeros { top: 22px; right: 20px; }
+    #ajuda { display: none; }
+    #banda { bottom: 20px; right: 20px; }
+  }
+</style>
+
+<div id="palco">
+  <canvas id="tela"></canvas>
+
+  <div class="hud" id="titulo">
+    <h1>Cérebro 3D · dipolos na montagem 10-20</h1>
+    <p>Fp2 Fp1 F7 T3 T5 O1 Oz O2 T6 T4 F8 F3 Fz F4 C3 P3 Pz P4 C4</p>
+    <p class="origem">cada agulha = orientação radial do dipolo equivalente naquele eletrodo</p>
+  </div>
+
+  <div class="hud" id="numeros">
+    <div><b id="n-canais">0</b> canais</div>
+    <div><b id="n-ligacoes">0</b> ligações</div>
+    <div><b id="n-fortes">0</b> fortes (&gt;0.6)</div>
+  </div>
+
+  <div class="hud" id="legenda">
+    <div class="dominio"><span class="ponto" style="background:#e8a33d"></span><b>Frontal</b> <i data-conta="frontal">0</i></div>
+    <div class="dominio"><span class="ponto" style="background:#3dbb6e"></span><b>Central</b> <i data-conta="central">0</i></div>
+    <div class="dominio"><span class="ponto" style="background:#6f8dd9"></span><b>Parietal</b> <i data-conta="parietal">0</i></div>
+    <div class="dominio"><span class="ponto" style="background:#d15a7a"></span><b>Temporal</b> <i data-conta="temporal">0</i></div>
+    <div class="dominio"><span class="ponto" style="background:#9a7fe0"></span><b>Occipital</b> <i data-conta="occipital">0</i></div>
+    <hr>
+    <div id="metodo">agulha = dipolo radial (perpendicular ao córtex, convenção de giro cortical) · linha = conectividade (placeholder)</div>
+  </div>
+
+  <div class="hud" id="banda">
+    <button data-banda="delta">Delta</button>
+    <button data-banda="theta">Theta</button>
+    <button data-banda="alpha" class="ativo">Alpha</button>
+    <button data-banda="beta">Beta</button>
+    <button data-banda="gamma">Gamma</button>
+  </div>
+
+  <div class="hud" id="ajuda">
+    <div><kbd>V</kbd> enquadrar 9:16</div>
+    <div><kbd>arraste</kbd> girar</div>
+    <div><kbd>scroll</kbd> aproximar</div>
+  </div>
+
+  <div id="detalhe"></div>
+</div>
+
+<script>
+// =========================================================================
+// GEOMETRIA: cabeça (esfera externa, translúcida) + cérebro (elipsoide
+// interno, os dois hemisférios) + eletrodos na superfície da cabeça, cada
+// um com uma agulha de dipolo apontando radialmente — a orientação padrão
+// de livro-texto para fontes corticais em giros (perpendiculares à
+// superfície; fontes em sulcos seriam tangenciais, não representadas aqui
+// por simplicidade). Ver Nunez & Srinivasan e a literatura de dipolo
+// radial/tangencial citada na resposta.
+// =========================================================================
+const R_CABECA = 200;
+const R_CEREBRO = 158; // elipsoide interno, um pouco menor e mais achatado
+
+const POS_10_20 = {
+  "Fp1": [90, -18], "Fp2": [90, 18],
+  "F7":  [90, -54], "F3":  [63, -45], "Fz":  [45, 0], "F4":  [63, 45], "F8":  [90, 54],
+  "T3":  [90, -90], "C3":  [45, -90], "Cz":  [0, 0],  "C4":  [45, 90], "T4":  [90, 90],
+  "T5":  [90, -126],"P3":  [63, -135],"Pz":  [45, 180],"P4":  [63, 135],"T6":  [90, 126],
+  "O1":  [90, -162],"Oz":  [90, 180], "O2":  [90, 162],
+};
+
+function direcaoEsfera(thetaDeg, phiDeg) {
+  const theta = thetaDeg * Math.PI / 180;
+  const phi = phiDeg * Math.PI / 180;
+  const y = Math.cos(theta);
+  const rh = Math.sin(theta);
+  const x = rh * Math.sin(phi);
+  const z = rh * Math.cos(phi);
+  return [x, y, z];
+}
+
+function coordEsfera(nomeCanal, raio) {
+  const p = POS_10_20[nomeCanal];
+  if (!p) return null;
+  const [x, y, z] = direcaoEsfera(p[0], p[1]);
+  return [x * raio, y * raio, z * raio];
+}
+
+function lobo(nome) {
+  const n = nome.toUpperCase();
+  if (n === "CZ" || (n[0] === "C" && !n.startsWith("CP"))) return "central";
+  if (n.startsWith("FP") || (n[0] === "F" && !n.startsWith("FC") && !n.startsWith("FT"))) return "frontal";
+  if (n.startsWith("T")) return "temporal";
+  if (n[0] === "P" && !n.startsWith("PO")) return "parietal";
+  if (n.startsWith("O")) return "occipital";
+  return "central";
+}
+
+const COR = {
+  frontal:   [232, 163,  61],
+  central:   [ 61, 187, 110],
+  parietal:  [111, 141, 217],
+  temporal:  [209,  90, 122],
+  occipital: [154, 127, 224],
+  meio:      [154, 166, 191],
+};
+
+const CANAIS_19 = ["Fp2","Fp1","F7","T3","T5","O1","Oz","O2","T6","T4","F8","F3","Fz","F4","C3","P3","Pz","P4","C4"];
+
+function gerarConectividade(banda, seed) {
+  let s = seed;
+  function rnd() { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }
+  const pesoBanda = {
+    delta: (a, b) => 0.5,
+    theta: (a, b) => (lobo(a) === "frontal" && lobo(b) === "frontal") ? 0.75 : 0.4,
+    alpha: (a, b) => (lobo(a) === "occipital" || lobo(a) === "parietal") && (lobo(b) === "occipital" || lobo(b) === "parietal") ? 0.85 : 0.35,
+    beta:  (a, b) => (lobo(a) === "central" || lobo(b) === "central") ? 0.7 : 0.4,
+    gamma: (a, b) => 0.35,
+  }[banda];
+  const M = {};
+  for (let i = 0; i < CANAIS_19.length; i++) {
+    for (let j = i + 1; j < CANAIS_19.length; j++) {
+      const a = CANAIS_19[i], b = CANAIS_19[j];
+      const base = pesoBanda(a, b);
+      const ruido = (rnd() - 0.5) * 0.5;
+      M[a + "|" + b] = Math.max(0.02, Math.min(0.98, base + ruido));
+    }
+  }
+  return M;
+}
+
+let bandaAtual = "alpha";
+let conMatriz = gerarConectividade(bandaAtual, 42);
+const LIMIAR_DESENHO = 0.42;
+
+// =========================================================================
+// malha do cérebro: um conjunto de anéis (paralelos) sobre um elipsoide,
+// mais um sulco central (fissura longitudinal) sugerido por uma linha —
+// suficiente pra "ler" como cérebro sem ser um mesh literal complexo
+// =========================================================================
+function construirMalhaCerebro() {
+  const aneis = [];
+  const nAneis = 11;
+  const nPontos = 28;
+  for (let i = 1; i < nAneis; i++) {
+    const theta = (i / nAneis) * Math.PI; // 0..pi (polo a polo)
+    const pontos = [];
+    for (let j = 0; j <= nPontos; j++) {
+      const phi = (j / nPontos) * Math.PI * 2;
+      const [dx, dy, dz] = direcaoEsfera(theta * 180 / Math.PI, phi * 180 / Math.PI);
+      // achata levemente no eixo Z (frente-tras) e X para parecer elipsoide craniano
+      pontos.push([dx * R_CEREBRO * 1.02, dy * R_CEREBRO * 0.92, dz * R_CEREBRO * 1.08]);
+    }
+    aneis.push(pontos);
+  }
+  return aneis;
+}
+const ANEIS_CEREBRO = construirMalhaCerebro();
+
+// fissura longitudinal: arco no plano sagital mediano, de frente pra tras
+function construirFissura() {
+  const pontos = [];
+  const n = 24;
+  for (let i = 0; i <= n; i++) {
+    const t = i / n;
+    const theta = t * Math.PI; // topo -> base ao longo do meio
+    const y = Math.cos(theta) * R_CEREBRO * 0.92;
+    const zRaio = Math.sin(theta) * R_CEREBRO * 1.08;
+    // duas linhas quase coincidentes (leve abertura) para sugerir profundidade da fissura
+    pontos.push({ x: 0, y, z: zRaio });
+  }
+  return pontos;
+}
+const FISSURA = construirFissura();
+
+// =========================================================================
+// motor visual
+// =========================================================================
+const tela = document.getElementById("tela");
+const palco = document.getElementById("palco");
+const ctx = tela.getContext("2d");
+const calmo = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const detalheEl = document.getElementById("detalhe");
+
+let L = 0, A = 0, dpr = 1;
+function medir() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const r = palco.getBoundingClientRect();
+  L = Math.max(1, Math.round(r.width));
+  A = Math.max(1, Math.round(r.height));
+  tela.width = Math.round(L * dpr);
+  tela.height = Math.round(A * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+medir();
+
+let prontoParaEnquadrar = false;
+function enquadrar() {
+  if (!prontoParaEnquadrar) return;
+  const Rm = R_CABECA * 1.28; // folga pra agulha do dipolo e halo
+  const alvoRaio = Math.min(L, A) * 0.42;
+  cam.alvoDist = Math.max(380, Math.min(3200, ((FOCO * Rm) / alvoRaio) * 1.18));
+}
+
+addEventListener("resize", () => { medir(); enquadrar(); });
+addEventListener("keydown", (e) => {
+  if (e.key === "v" || e.key === "V") {
+    document.body.classList.toggle("retrato");
+    medir();
+    enquadrar();
+  }
+});
+
+// eletrodos: posição na superfície da CABEÇA (não do cérebro, que é menor
+// e fica por dentro) — como num escalpo de verdade
+const nos = CANAIS_19.map((nome) => {
+  const [x, y, z] = coordEsfera(nome, R_CABECA);
+  const dir = direcaoEsfera(POS_10_20[nome][0], POS_10_20[nome][1]);
+  return {
+    id: nome,
+    dominio: lobo(nome),
+    x, y, z,
+    dir, // vetor unitário radial — direção do dipolo
+    vx: 0, vy: 0, vz: 0,
+    r: 6,
+  };
+});
+const porId = new Map(nos.map((n) => [n.id, n]));
+
+function construirArestas() {
+  const lista = [];
+  for (let i = 0; i < CANAIS_19.length; i++) {
+    for (let j = i + 1; j < CANAIS_19.length; j++) {
+      const a = CANAIS_19[i], b = CANAIS_19[j];
+      const peso = conMatriz[a + "|" + b];
+      if (peso >= LIMIAR_DESENHO) lista.push({ a: porId.get(a), b: porId.get(b), peso });
+    }
+  }
+  return lista;
+}
+let arestas = construirArestas();
+
+const vizinhos = new Map(nos.map((n) => [n.id, new Map()]));
+function reconstruirVizinhos() {
+  for (const m of vizinhos.values()) m.clear();
+  for (const e of arestas) {
+    vizinhos.get(e.a.id).set(e.b.id, e.peso);
+    vizinhos.get(e.b.id).set(e.a.id, e.peso);
+  }
+}
+reconstruirVizinhos();
+
+function atualizarHUD() {
+  document.getElementById("n-canais").textContent = nos.length;
+  document.getElementById("n-ligacoes").textContent = arestas.length;
+  document.getElementById("n-fortes").textContent = arestas.filter((e) => e.peso > 0.6).length;
+  for (const el of document.querySelectorAll("[data-conta]")) {
+    el.textContent = nos.filter((n) => n.dominio === el.dataset.conta).length;
+  }
+}
+atualizarHUD();
+
+// oscilação suave da amplitude do dipolo (não da posição — a cabeça fica parada)
+for (const n of nos) { n.fase = Math.random() * Math.PI * 2; }
+let relogio = 0;
+function passo() { relogio += 0.02; }
+prontoParaEnquadrar = true;
+
+const FOCO = 820;
+const cam = { yaw: 0.5, pitch: -0.16, dist: 900, alvoDist: 900 };
+enquadrar();
+cam.dist = cam.alvoDist;
+
+function projetarP(x, y, z) {
+  const cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  const x1 = x * cy - z * sy;
+  const z1 = x * sy + z * cy;
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  const y1 = y * cp - z1 * sp;
+  const z2 = y * sp + z1 * cp;
+  const prof = z2 + cam.dist;
+  const s = FOCO / Math.max(prof, 60);
+  return { x: L / 2 + x1 * s, y: A / 2 + y1 * s, s, prof };
+}
+function projetar(p) { return projetarP(p.x, p.y, p.z); }
+
+let arrastando = false, ultimoX = 0, ultimoY = 0, girarSozinho = !calmo;
+let sobre = null, ponteiro = null;
+
+tela.addEventListener("pointerdown", (e) => {
+  arrastando = true; girarSozinho = false;
+  ultimoX = e.clientX; ultimoY = e.clientY;
+  tela.classList.add("arrastando");
+  tela.setPointerCapture(e.pointerId);
+});
+tela.addEventListener("pointermove", (e) => {
+  const r = tela.getBoundingClientRect();
+  ponteiro = { x: e.clientX - r.left, y: e.clientY - r.top };
+  if (!arrastando) return;
+  cam.yaw += (e.clientX - ultimoX) * 0.006;
+  cam.pitch = Math.max(-1.35, Math.min(1.35, cam.pitch + (e.clientY - ultimoY) * 0.005));
+  ultimoX = e.clientX; ultimoY = e.clientY;
+});
+function soltar() {
+  if (!arrastando) return;
+  arrastando = false;
+  tela.classList.remove("arrastando");
+  if (!calmo) setTimeout(() => { if (!arrastando) girarSozinho = true; }, 2600);
+}
+tela.addEventListener("pointerup", soltar);
+tela.addEventListener("pointercancel", soltar);
+tela.addEventListener("pointerleave", () => { ponteiro = null; detalheEl.classList.remove("visivel"); });
+tela.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  cam.alvoDist = Math.max(380, Math.min(1900, cam.alvoDist + e.deltaY * 0.6));
+}, { passive: false });
+
+document.getElementById("banda").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-banda]");
+  if (!btn) return;
+  document.querySelectorAll("#banda button").forEach((b) => b.classList.remove("ativo"));
+  btn.classList.add("ativo");
+  bandaAtual = btn.dataset.banda;
+  const seeds = { delta: 11, theta: 22, alpha: 42, beta: 77, gamma: 99 };
+  conMatriz = gerarConectividade(bandaAtual, seeds[bandaAtual]);
+  arestas = construirArestas();
+  reconstruirVizinhos();
+  atualizarHUD();
+});
+
+const pulsos = [];
+function talvezPulso() {
+  if (calmo || pulsos.length > 3 || arestas.length === 0) return;
+  if (Math.random() > 0.03) return;
+  const fortes = arestas.filter((e) => e.peso > 0.55);
+  const pool = fortes.length ? fortes : arestas;
+  pulsos.push({ e: pool[(Math.random() * pool.length) | 0], t: 0 });
+}
+
+function rgba([r, g, b], a) { return `rgba(${r},${g},${b},${a})`; }
+
+function quadro() {
+  passo();
+  cam.dist += (cam.alvoDist - cam.dist) * 0.09;
+  if (girarSozinho && !sobre) cam.yaw += 0.0014;
+
+  for (const n of nos) n.p = projetar(n);
+
+  sobre = null;
+  if (ponteiro && !arrastando) {
+    let melhor = 26 * 26;
+    for (const n of nos) {
+      const dx = n.p.x - ponteiro.x, dy = n.p.y - ponteiro.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < melhor) { melhor = d2; sobre = n; }
+    }
+  }
+  const vizinhos_ = sobre ? vizinhos.get(sobre.id) : null;
+  const aceso = (n) => !sobre || n === sobre || (vizinhos_ && vizinhos_.has(n.id));
+
+  ctx.clearRect(0, 0, L, A);
+
+  // profundidade média da cena, pra decidir opacidade da malha do cérebro
+  const profCentro = projetarP(0, 0, 0).prof;
+
+  // --- 1. cabeça: esfera translúcida via anéis de latitude, source-over ---
+  ctx.globalCompositeOperation = "source-over";
+  ctx.strokeStyle = "rgba(154,166,191,0.10)";
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 9; i++) {
+    const theta = (i / 9) * 180;
+    let prev = null;
+    for (let j = 0; j <= 32; j++) {
+      const phi = (j / 32) * 360;
+      const [dx, dy, dz] = direcaoEsfera(theta, phi);
+      const P = projetarP(dx * R_CABECA, dy * R_CABECA, dz * R_CABECA);
+      if (prev) {
+        ctx.globalAlpha = P.prof > cam.dist ? 0.35 : 1;
+        ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(P.x, P.y); ctx.stroke();
+      }
+      prev = P;
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  // --- 2. cérebro: anéis do elipsoide interno + fissura longitudinal ---
+  for (const anel of ANEIS_CEREBRO) {
+    let prev = null;
+    for (const [dx, dy, dz] of anel) {
+      const P = projetarP(dx, dy, dz);
+      const frente = P.prof < cam.dist; // mais perto da camera = frente do cerebro
+      if (prev) {
+        ctx.strokeStyle = frente ? "rgba(200,150,150,0.34)" : "rgba(120,90,95,0.10)";
+        ctx.lineWidth = frente ? 0.9 : 0.6;
+        ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(P.x, P.y); ctx.stroke();
+      }
+      prev = P;
+    }
+  }
+  let prevF = null;
+  for (const pt of FISSURA) {
+    const P = projetarP(pt.x, pt.y, pt.z);
+    const frente = P.prof < cam.dist;
+    if (prevF) {
+      ctx.strokeStyle = frente ? "rgba(220,180,180,0.55)" : "rgba(140,100,105,0.12)";
+      ctx.lineWidth = frente ? 1.3 : 0.7;
+      ctx.beginPath(); ctx.moveTo(prevF.x, prevF.y); ctx.lineTo(P.x, P.y); ctx.stroke();
+    }
+    prevF = P;
+  }
+
+  // --- 3. ligações de conectividade entre eletrodos (aditivo) ---
+  ctx.globalCompositeOperation = "lighter";
+  const ordenadas = arestas.slice().sort((p, q) =>
+    (q.a.p.prof + q.b.p.prof) - (p.a.p.prof + p.b.p.prof));
+  for (const e of ordenadas) {
+    const destaque = sobre && (e.a === sobre || e.b === sobre);
+    const apagado = sobre && !destaque;
+    const prof = (e.a.p.prof + e.b.p.prof) / 2;
+    const fade = Math.max(0.06, Math.min(1, 1400 / prof - 0.42));
+    const alfa = (destaque ? 0.85 : apagado ? 0.04 : 0.08 + 0.36 * e.peso) * fade;
+    const cor = destaque ? COR[e.a === sobre ? e.b.dominio : e.a.dominio] : COR.meio;
+    ctx.strokeStyle = rgba(cor, alfa);
+    ctx.lineWidth = (destaque ? 1.1 + 2 * e.peso : 0.4 + 1.3 * e.peso) * Math.min(e.a.p.s, e.b.p.s);
+    ctx.beginPath(); ctx.moveTo(e.a.p.x, e.a.p.y); ctx.lineTo(e.b.p.x, e.b.p.y); ctx.stroke();
+  }
+
+  talvezPulso();
+  for (let i = pulsos.length - 1; i >= 0; i--) {
+    const p = pulsos[i];
+    p.t += 0.013;
+    if (p.t >= 1) { pulsos.splice(i, 1); continue; }
+    const e = p.e, t = p.t;
+    const x = e.a.p.x + (e.b.p.x - e.a.p.x) * t;
+    const y = e.a.p.y + (e.b.p.y - e.a.p.y) * t;
+    const s = e.a.p.s + (e.b.p.s - e.a.p.s) * t;
+    const brilho = Math.sin(t * Math.PI);
+    const cor = COR[e.b.dominio];
+    const raio = 11 * s * (0.6 + e.peso * 0.6);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, Math.max(raio, 1));
+    g.addColorStop(0, rgba(cor, 0.5 * brilho));
+    g.addColorStop(1, rgba(cor, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, Math.max(raio, 1), 0, 7); ctx.fill();
+  }
+
+  // --- 4. eletrodos + agulhas de dipolo, do fundo pra frente ---
+  const porProf = nos.slice().sort((p, q) => q.p.prof - p.p.prof);
+  const COMPRIMENTO_DIPOLO = 34;
+
+  for (const n of porProf) {
+    const { x, y, s, prof } = n.p;
+    const fade = Math.max(0.18, Math.min(1, 1500 / prof - 0.32));
+    const on = aceso(n);
+    const alfa = (on ? 1 : 0.28) * fade;
+    const cor = COR[n.dominio] || COR.meio;
+    const raio = Math.max(n.r * s, 1.5);
+
+    // ponta da agulha: posição + direção radial * comprimento, oscilando
+    // levemente em amplitude pra sugerir atividade do dipolo
+    const amp = 0.72 + 0.28 * Math.sin(relogio * 1.6 + n.fase);
+    const comp = COMPRIMENTO_DIPOLO * amp;
+    const px = n.x + n.dir[0] * comp;
+    const py = n.y + n.dir[1] * comp;
+    const pz = n.z + n.dir[2] * comp;
+    const ponta = projetarP(px, py, pz);
+
+    // linha da agulha (aditivo, brilha como as conexões)
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = rgba(cor, (destaqueAgulha(n) ? 0.95 : 0.45) * alfa);
+    ctx.lineWidth = Math.max(1.4 * s, 0.9);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ponta.x, ponta.y); ctx.stroke();
+
+    // ponta da agulha: pequeno triângulo/seta
+    const ang = Math.atan2(ponta.y - y, ponta.x - x);
+    const tam = Math.max(5 * ponta.s, 3);
+    ctx.fillStyle = rgba(cor, alfa);
+    ctx.beginPath();
+    ctx.moveTo(ponta.x, ponta.y);
+    ctx.lineTo(ponta.x - tam * Math.cos(ang - 0.4), ponta.y - tam * Math.sin(ang - 0.4));
+    ctx.lineTo(ponta.x - tam * Math.cos(ang + 0.4), ponta.y - tam * Math.sin(ang + 0.4));
+    ctx.closePath();
+    ctx.fill();
+
+    // halo + núcleo do eletrodo na superfície da cabeça
+    const halo = raio * (n === sobre ? 6 : 4);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, halo);
+    g.addColorStop(0, rgba(cor, 0.3 * alfa));
+    g.addColorStop(0.45, rgba(cor, 0.08 * alfa));
+    g.addColorStop(1, rgba(cor, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, halo, 0, 7); ctx.fill();
+
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = rgba(cor, Math.min(1, 0.9 * alfa + 0.1 * fade));
+    ctx.beginPath(); ctx.arc(x, y, raio, 0, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(8,11,18,0.55)";
+    ctx.lineWidth = 0.6;
+    ctx.stroke();
+  }
+
+  function destaqueAgulha(n) { return !sobre || n === sobre || (vizinhos_ && vizinhos_.has(n.id)); }
+
+  // --- 5. rótulos ---
+  ctx.globalCompositeOperation = "source-over";
+  for (const n of porProf) {
+    const { x, y, s, prof } = n.p;
+    const fade = Math.max(0.18, Math.min(1, 1500 / prof - 0.32));
+    const on = aceso(n);
+    const alfaTexto = (n === sobre ? 1 : on ? 0.66 : 0.1) * Math.max(0.22, fade);
+    if (alfaTexto < 0.12) continue;
+    const corpo = Math.max(10, Math.min(15, 12 * (0.62 + s * 0.55)));
+    ctx.font = `${n === sobre ? 600 : 400} ${corpo}px "IBM Plex Mono", monospace`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    const raio = Math.max(n.r * s, 1.5);
+    const yTexto = y + raio + Math.max(6 * s, 5);
+    ctx.fillStyle = `rgba(8,11,18,${0.65 * alfaTexto})`;
+    ctx.fillText(n.id, x + 1, yTexto + 1);
+    ctx.fillStyle = `rgba(226,234,247,${alfaTexto})`;
+    ctx.fillText(n.id, x, yTexto);
+  }
+
+  if (sobre && !arrastando) {
+    const p = sobre.p;
+    const conexoes = [...vizinhos.get(sobre.id).entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, peso]) => `${id} <span class="rot">${peso.toFixed(2)}</span>`)
+      .join("<br>");
+    detalheEl.innerHTML = `<b>${sobre.id}</b> · ${sobre.dominio}<br><span class="rot">dipolo radial · top conexões (${bandaAtual})</span><br>${conexoes || "<span class=\"rot\">nenhuma acima do limiar</span>"}`;
+    let dx = p.x + 18, dy = p.y - 10;
+    if (dx + 260 > L) dx = p.x - 268;
+    if (dy < 10) dy = 10;
+    detalheEl.style.left = dx + "px";
+    detalheEl.style.top = dy + "px";
+    detalheEl.classList.add("visivel");
+  } else {
+    detalheEl.classList.remove("visivel");
+  }
+
+  requestAnimationFrame(quadro);
+}
+requestAnimationFrame(quadro);
+
+// =========================================================================
+// NOTAS
+//
+// GEOMETRIA: a "cabeça" é uma esfera de referência (raio 200, os mesmos
+// ângulos theta/phi do sistema 10-20 usados nas versões anteriores) e o
+// "cérebro" é um elipsoide um pouco menor por dentro dela, achatado
+// lateralmente e alongado no eixo frente-tras, com uma fissura
+// longitudinal mediana sugerida — é um desenho estilizado, não uma malha
+// de córtex real (isso exigiria FreeSurfer/BEM, como no tutorial do MNE
+// "EEG source localization given electrode locations on an MRI", que
+// reconstrói a superfície a partir de MRI real do sujeito).
+//
+// DIPOLO: cada eletrodo tem uma "agulha" apontando na direção RADIAL —
+// perpendicular à superfície da cabeça naquele ponto, apontando pra fora.
+// É a convenção padrão de livro-texto para fontes corticais nos GIROS
+// (fontes em sulcos seriam tangenciais à superfície, não radiais — não
+// representadas aqui). A amplitude da agulha oscila suavemente só como
+// indicação visual de "atividade", não é amplitude real medida.
+//
+// CONECTIVIDADE: as linhas entre eletrodos continuam sendo o mesmo
+// placeholder ilustrativo por banda das versões anteriores — ver a nota
+// equivalente no arquivo montagem-10-20-hbn.html para como plugar dados
+// reais de potência ou conectividade.
+// =========================================================================
+</script>

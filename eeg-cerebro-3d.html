@@ -1,0 +1,2166 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EEG Dashboard 3D — cérebro real (sem licença)</title>
+<style>
+  :root {
+    --bg: #0b0f17; --panel: #10161f;
+    --ink: #c8d2e4; --ink-dim: #7f8ba1; --ink-faint: #4d5768;
+    --border: rgba(154,166,191,0.14);
+    --frontal: #e8a33d; --central: #3dbb6e; --parietal: #6f8dd9;
+    --temporal: #d15a7a; --occipital: #9a7fe0;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; overflow: hidden; background: var(--bg); font-family: "Segoe UI", system-ui, sans-serif; color: var(--ink); }
+
+  #layout { display: grid; grid-template-columns: 360px 1fr; height: 100vh; width: 100vw; }
+
+  #painel-tracos {
+    background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #cabecalho-tracos { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); flex: none; }
+  #cabecalho-tracos h1 { margin: 0; font-size: 15px; font-weight: 600; color: #eef3fb; }
+  #cabecalho-tracos p { margin: 4px 0 0; font-size: 10.5px; color: var(--ink-dim); }
+
+  #referencia { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+  #referencia button {
+    font-family: inherit; font-size: 10.5px; letter-spacing: 0.02em;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 4px 9px; cursor: pointer; transition: all 0.15s;
+  }
+  #referencia button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #referencia button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+  #referencia-texto { margin: 6px 0 0; font-size: 10.5px; color: var(--ink-dim); line-height: 1.5; }
+
+  #dado-real { display: flex; gap: 6px; margin-top: 10px; }
+  #dado-real select, #dado-real button {
+    font-family: inherit; font-size: 10.5px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 4px 8px; cursor: pointer;
+  }
+  #dado-real button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #dado-real button.ativo { color: #eef3fb; background: rgba(220,80,80,0.18); border-color: rgba(220,80,80,0.45); }
+  #dado-real-status { margin: 4px 0 0; font-size: 10px; color: var(--ink-dim); min-height: 1.2em; }
+
+  #velocidade-controle { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 10.5px; color: var(--ink-dim); }
+  #velocidade-controle input[type=range] { width: 110px; }
+
+  body.somente-sinais #abas-tracos { display: none; }
+  body.somente-sinais #dado-real { display: none; }
+  body.somente-sinais #dado-real-status { display: none; }
+  #clinico-escala { display: none; align-items: center; gap: 6px; margin-top: 9px; font-size: 10.5px; color: var(--ink-dim); }
+  body.somente-sinais #clinico-escala { display: flex; }
+  #clinico-escala select {
+    font-family: inherit; font-size: 10.5px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 3px 6px;
+  }
+
+  #abas-tracos { display: flex; gap: 6px; margin-top: 10px; }
+  #abas-tracos button {
+    font-family: inherit; font-size: 10.5px; letter-spacing: 0.02em;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 4px 9px; cursor: pointer; transition: all 0.15s;
+  }
+  #abas-tracos button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #abas-tracos button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+
+  #zoom-controles { display: none; margin-top: 9px; }
+  #zoom-banda { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  #zoom-banda button {
+    font-family: inherit; font-size: 10px; letter-spacing: 0.02em;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 3px 7px; cursor: pointer;
+  }
+  #zoom-banda button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #zoom-banda button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+  #zoom-canais-acoes { display: flex; gap: 6px; margin-bottom: 8px; }
+  #zoom-canais-acoes button {
+    font-family: inherit; font-size: 10px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 3px 7px; cursor: pointer;
+  }
+  #zoom-canais-acoes button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #zoom-canais { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px 6px; }
+  .zoom-canal-item { display: flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--ink-dim); cursor: pointer; }
+  .zoom-canal-item input { margin: 0; cursor: pointer; }
+
+  #zoom-maximizar {
+    display: block; margin-bottom: 8px;
+    font-family: inherit; font-size: 10.5px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 4px 9px; cursor: pointer;
+  }
+  #zoom-maximizar:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+
+  body.somente-sinais #painel-3d { display: none; }
+  body.somente-sinais #layout { grid-template-columns: 1fr; }
+  body.somente-sinais #painel-tracos { border-right: none; }
+
+  #janela-sinais-abas { display: none; gap: 6px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex: none; }
+  body.somente-sinais #janela-sinais-abas { display: flex; }
+  #janela-sinais-abas button {
+    font-family: inherit; font-size: 11px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 5px 11px; cursor: pointer;
+  }
+  #janela-sinais-abas button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #janela-sinais-abas button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+
+  #analise-tdah { display: none; flex: 1; overflow-y: auto; padding: 16px 20px; flex-direction: column; gap: 16px; }
+  .analise-aviso {
+    font-size: 11px; color: var(--ink-dim); line-height: 1.6; background: rgba(234,179,8,0.08);
+    border: 1px solid rgba(234,179,8,0.25); border-radius: 6px; padding: 10px 12px;
+  }
+  .analise-painel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .analise-painel h3 { margin: 0; font-size: 13px; font-weight: 600; color: #eef3fb; }
+  .analise-caveat { margin: 4px 0 12px; font-size: 10.5px; color: var(--ink-dim); line-height: 1.5; }
+
+  .analise-barras { display: flex; flex-direction: column; gap: 6px; }
+  .analise-barra-linha { display: grid; grid-template-columns: 42px 1fr 52px; align-items: center; gap: 8px; font-size: 11px; }
+  .analise-barra-fundo { height: 12px; background: rgba(154,166,191,0.08); border-radius: 3px; overflow: hidden; }
+  .analise-barra-preenchimento { height: 100%; border-radius: 3px; }
+
+  .analise-espectral { display: flex; flex-direction: column; gap: 10px; }
+  .analise-espectral-canal { display: grid; grid-template-columns: 42px 1fr; align-items: center; gap: 8px; }
+  .analise-espectral-bandas { display: flex; gap: 3px; align-items: flex-end; height: 28px; }
+  .analise-espectral-banda { flex: 1; border-radius: 2px 2px 0 0; min-height: 2px; }
+
+  .analise-matriz { display: grid; gap: 2px; font-size: 9px; }
+  .analise-matriz-celula {
+    aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    border-radius: 2px; color: rgba(255,255,255,0.85); overflow: hidden;
+  }
+  .analise-matriz-rotulo { font-size: 9px; color: var(--ink-dim); display: flex; align-items: center; justify-content: center; }
+
+  #canvas-tracos-wrap { flex: 1; overflow: hidden; position: relative; }
+  #canvas-tracos { display: block; width: 100%; height: 100%; }
+
+  #painel-3d { position: relative; overflow: hidden; }
+  #canvas-3d { display: block; width: 100%; height: 100%; }
+
+  .hud { position: absolute; pointer-events: none; z-index: 2; }
+  #hud-titulo { top: 16px; left: 20px; }
+  #hud-titulo h1 { margin: 0; font-size: 17px; font-weight: 500; color: #eef3fb; }
+  #hud-titulo p { margin: 3px 0 0; font-size: 11px; color: var(--ink-dim); }
+
+  #status { position: absolute; top: 60px; left: 20px; pointer-events: none; font-size: 11.5px; color: var(--ink-dim); line-height: 1.6; }
+  #status b { color: #eef3fb; }
+
+  #carregando {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); z-index: 20; font-size: 13px; color: var(--ink-dim); flex-direction: column; gap: 10px;
+  }
+  #carregando .barra { width: 220px; height: 3px; background: rgba(154,166,191,0.15); border-radius: 2px; overflow: hidden; }
+  #carregando .barra i { display: block; height: 100%; width: 30%; background: #6f8dd9; animation: varre 1.1s ease-in-out infinite; }
+  @keyframes varre { 0% { transform: translateX(-100%); } 100% { transform: translateX(330%); } }
+
+  #banda { position: absolute; bottom: 18px; right: 22px; display: flex; gap: 6px; pointer-events: auto; }
+  #banda button {
+    font-family: inherit; font-size: 11px; letter-spacing: 0.02em;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 5px 10px; cursor: pointer; transition: all 0.15s;
+  }
+  #banda button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #banda button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+
+  #controles { position: absolute; bottom: 18px; left: 20px; display: flex; gap: 8px; pointer-events: auto; }
+  #controles button {
+    font-family: inherit; font-size: 11.5px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 5px 11px; cursor: pointer;
+  }
+  #controles button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #controles button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); }
+
+  #hud-abas { top: 16px; right: 20px; display: flex; gap: 6px; pointer-events: auto; }
+  #hud-abas button {
+    font-family: inherit; font-size: 11px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 5px 10px; cursor: pointer; transition: all 0.15s;
+  }
+  #hud-abas button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #hud-abas button.ativo { color: #eef3fb; background: rgba(154,166,191,0.16); border-color: rgba(154,166,191,0.45); }
+
+  #controles-fontes {
+    position: absolute; bottom: 18px; right: 22px; display: none; gap: 8px;
+    align-items: center; pointer-events: auto; font-size: 11px; color: var(--ink-dim);
+  }
+  #controles-fontes select, #controles-fontes button {
+    font-family: inherit; font-size: 11px;
+    background: rgba(154,166,191,0.07); border: 1px solid rgba(154,166,191,0.18);
+    color: var(--ink-dim); border-radius: 5px; padding: 5px 9px; cursor: pointer;
+  }
+  #controles-fontes button:hover { color: var(--ink); border-color: rgba(154,166,191,0.35); }
+  #controles-fontes input[type=range] { width: 140px; }
+  #fontes-status { max-width: 260px; line-height: 1.5; }
+
+  #hud-tempo-selecionado {
+    top: 92px; left: 20px; display: none; align-items: center; gap: 8px; pointer-events: auto;
+    background: rgba(238,243,251,0.1); border: 1px solid rgba(238,243,251,0.3);
+    border-radius: 6px; padding: 6px 10px; font-size: 11px; color: #eef3fb;
+  }
+  #hud-tempo-selecionado button, #tempo-selecionado-info button {
+    font-family: inherit; font-size: 10.5px;
+    background: rgba(154,166,191,0.12); border: 1px solid rgba(154,166,191,0.3);
+    color: #eef3fb; border-radius: 5px; padding: 3px 8px; cursor: pointer;
+  }
+  #hud-tempo-selecionado button:hover, #tempo-selecionado-info button:hover { background: rgba(154,166,191,0.22); }
+  #tempo-selecionado-info {
+    display: none; align-items: center; gap: 8px; margin-top: 9px; font-size: 10.5px; color: #eef3fb;
+  }
+  body.somente-sinais #tempo-selecionado-info.ativo { display: flex; }
+
+  #legenda-fontes { top: 92px; left: 20px; display: none; flex-direction: column; gap: 4px; }
+  #legenda-barra {
+    width: 160px; height: 10px; border-radius: 4px;
+    background: linear-gradient(to right, #1d4ed8, #0ea5a5, #22c55e, #eab308, #ef4444);
+  }
+  #legenda-rotulos { display: flex; justify-content: space-between; width: 160px; font-size: 9.5px; color: var(--ink-dim); }
+  #legenda-titulo { font-size: 10px; color: var(--ink-dim); }
+
+  #tooltip {
+    position: absolute; pointer-events: none; z-index: 5;
+    background: rgba(12,16,26,0.94); border: 1px solid rgba(154,166,191,0.25);
+    border-radius: 7px; padding: 8px 12px; color: var(--ink); font-size: 12px;
+    line-height: 1.5; opacity: 0; transition: opacity 0.12s; max-width: 230px;
+  }
+  #tooltip.on { opacity: 1; }
+  #tooltip b { color: #eef3fb; font-weight: 600; font-size: 13px; }
+  #tooltip .sub { color: var(--ink-dim); font-size: 11px; }
+
+  ::-webkit-scrollbar { width: 0; height: 0; }
+</style>
+</head>
+<body>
+
+<div id="layout">
+
+  <div id="painel-tracos">
+    <div id="cabecalho-tracos">
+      <h1>19 canais — montagem 10-20</h1>
+      <p>substituível: veja <code>window.setEEGData(...)</code> no fim do script</p>
+      <div id="referencia">
+        <button data-ref="nativa" class="ativo">Nativa A1/A2</button>
+        <button data-ref="cz">Cz</button>
+        <button data-ref="average">Average</button>
+      </div>
+      <p id="referencia-texto"></p>
+      <div id="velocidade-controle">
+        <label for="velocidade-slider">velocidade: <span id="velocidade-valor">1.0x</span></label>
+        <input type="range" id="velocidade-slider" min="0.1" max="3" step="0.1" value="1">
+      </div>
+      <div id="dado-real">
+        <select id="dado-real-sujeito"></select>
+        <button id="dado-real-tocar">Tocar dado real</button>
+      </div>
+      <p id="dado-real-status"></p>
+      <div id="abas-tracos">
+        <button id="aba-tracos-todos" class="ativo">Todos</button>
+        <button id="aba-tracos-zoom">Canais (zoom)</button>
+      </div>
+      <div id="zoom-controles">
+        <div id="zoom-banda">
+          <button data-zbanda="delta">Delta</button>
+          <button data-zbanda="theta">Theta</button>
+          <button data-zbanda="alpha" class="ativo">Alpha</button>
+          <button data-zbanda="beta">Beta</button>
+          <button data-zbanda="gamma">Gamma</button>
+        </div>
+        <button id="zoom-maximizar">Maximizar sinais ⤢</button>
+        <div id="clinico-escala">
+          <span>janela visível:</span>
+          <select id="clinico-escala-select">
+            <option value="5">5 s</option>
+            <option value="10" selected>10 s</option>
+            <option value="15">15 s</option>
+            <option value="30">30 s</option>
+          </select>
+        </div>
+        <div id="tempo-selecionado-info">
+          <span id="tempo-selecionado-label"></span>
+          <button id="tempo-selecionado-voltar">Voltar ao vivo</button>
+        </div>
+        <div id="zoom-canais-acoes">
+          <button id="zoom-marcar-todos">Marcar todos</button>
+          <button id="zoom-desmarcar-todos">Desmarcar todos</button>
+        </div>
+        <div id="zoom-canais"></div>
+      </div>
+    </div>
+    <div id="janela-sinais-abas">
+      <button id="aba-janela-tracados" class="ativo">Traçados clínicos</button>
+      <button id="aba-janela-analise">Análise TDAH</button>
+    </div>
+    <div id="canvas-tracos-wrap"><canvas id="canvas-tracos"></canvas></div>
+    <div id="analise-tdah">
+      <div class="analise-aviso">
+        Descritivo, não diagnóstico. Os limiares da literatura vêm de EEG em <b>repouso</b>; aqui o dado é de uma
+        tarefa de atenção visual (contar personagens de desenho) — não compare os números direto com limiares
+        clínicos publicados.
+      </div>
+      <div class="analise-aviso" id="analise-janela-info"></div>
+
+      <div class="analise-painel">
+        <h3>Theta/Beta Ratio (TBR)</h3>
+        <p class="analise-caveat">Marcador clássico, mas pouco confiável isoladamente (38–63% de sensibilidade na literatura).</p>
+        <div id="tbr-barras" class="analise-barras"></div>
+      </div>
+
+      <div class="analise-painel">
+        <h3>Perfil espectral (5 bandas)</h3>
+        <p class="analise-caveat">Potência (RMS) de cada banda por canal, normalizada pelo maior valor entre as 5 daquele canal.</p>
+        <div id="espectral-grafico" class="analise-espectral"></div>
+      </div>
+
+      <div class="analise-painel">
+        <h3>Sincronização entre canais <span id="coerencia-banda-label"></span></h3>
+        <p class="analise-caveat">Aproximação por correlação no tempo do sinal já filtrado na banda — não é a coerência espectral (magnitude-squared coherence) da literatura.</p>
+        <div id="coerencia-matriz" class="analise-matriz"></div>
+      </div>
+
+      <div class="analise-painel">
+        <h3>Dimensão fractal (Higuchi)</h3>
+        <p class="analise-caveat">Complexidade/"serrilhado" do sinal bruto. Valores típicos de EEG ficam entre ~1.0 (suave) e ~2.0 (muito complexo).</p>
+        <div id="fractal-barras" class="analise-barras"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="painel-3d">
+    <canvas id="canvas-3d"></canvas>
+    <div id="carregando"><div>Carregando o mesh do cérebro…</div><div class="barra"><i></i></div></div>
+
+    <div class="hud" id="hud-titulo">
+      <h1>Cérebro 3D — mesh real</h1>
+      <p>brain.obj colorido por potência medida (filtro de banda real)</p>
+    </div>
+    <div id="status"></div>
+
+    <div class="hud" id="hud-tempo-selecionado">
+      <span id="hud-tempo-label"></span>
+      <button id="hud-tempo-voltar">Voltar ao vivo</button>
+    </div>
+
+    <div class="hud" id="legenda-fontes">
+      <div id="legenda-titulo">Ativação estimada (dSPM)</div>
+      <div id="legenda-barra"></div>
+      <div id="legenda-rotulos">
+        <span>menor</span>
+        <span>maior (provável fonte)</span>
+      </div>
+    </div>
+
+    <div class="hud" id="hud-abas">
+      <button id="aba-sensores" class="ativo">Sensores</button>
+      <button id="aba-fontes">Fontes corticais (MNE)</button>
+    </div>
+
+    <div id="banda">
+      <button data-banda="delta">Delta 1–4Hz</button>
+      <button data-banda="theta">Theta 4–8Hz</button>
+      <button data-banda="alpha" class="ativo">Alpha 8–13Hz</button>
+      <button data-banda="beta">Beta 13–30Hz</button>
+      <button data-banda="gamma">Gamma 30–45Hz</button>
+    </div>
+
+    <div id="controles">
+      <button id="btn-pausa">Pausar</button>
+      <button id="btn-rotacao" class="ativo">Girar</button>
+    </div>
+
+    <div id="controles-fontes">
+      <select id="fontes-sujeito"></select>
+      <input type="range" id="fontes-tempo" min="0" max="0" step="0.5" value="0">
+      <span id="fontes-tempo-label">0.0s</span>
+      <button id="fontes-rodar">Rodar reconstrução</button>
+      <span id="fontes-status"></span>
+    </div>
+
+    <div id="tooltip"></div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+
+<script>
+// =========================================================================
+// 0. ONDE ESTÁ O MODELO — aponte para os arquivos que já vieram no seu
+//    projeto lcjs-example-1503-eegMeshModel/assets/. Sirva esta pasta com
+//    um servidor local (não abra por file://, o fetch do OBJ vai falhar):
+//
+//      cd lcjs-example-1503-eegMeshModel
+//      python -m http.server 8000
+//
+//    e então abra http://localhost:8000/SEU_ARQUIVO.html (coloque este
+//    arquivo dentro da pasta do projeto, ao lado de "assets/").
+// =========================================================================
+const CAMINHO_BRAIN_OBJ = "assets/brain.obj";
+const BACKEND_URL = "http://localhost:8001"; // 8000 tende a ficar presa por processos zumbi neste ambiente
+
+// =========================================================================
+// 0b. JANELA "SÓ SINAIS" — aberta pelo botão "Maximizar sinais" a partir da
+//    aba Canais (zoom). É a MESMA página, com ?janela=sinais na URL: o
+//    painel 3D fica oculto (CSS) e o brain.obj nem é carregado. O sinal
+//    continua sendo gerado só na janela principal; esta janela só recebe
+//    e desenha, via BroadcastChannel — funciona igual com sinal sintético
+//    ou dado real plugado por window.setEEGData na janela principal.
+// =========================================================================
+const PARAMS_URL = new URLSearchParams(location.search);
+const somenteSinais = PARAMS_URL.get("janela") === "sinais";
+if (somenteSinais) document.body.classList.add("somente-sinais");
+
+const CANAL_SINAIS_NOME = "eeg-cerebro-3d-sinais";
+const canalSinais = ("BroadcastChannel" in window) ? new BroadcastChannel(CANAL_SINAIS_NOME) : null;
+
+// =========================================================================
+// 1. MONTAGEM — os 19 canais exatos de adhdata.csv (Fp1,Fp2,F3,F4,C3,C4,
+//    P3,P4,O1,O2,F7,F8,T7,T8,P7,P8,Fz,Cz,Pz — nomenclatura moderna,
+//    inclui Cz como canal real, sem Oz)
+// =========================================================================
+const CANAIS_19 = ["Fp1","Fp2","F3","F4","C3","C4","P3","P4","O1","O2","F7","F8","T7","T8","P7","P8","Fz","Cz","Pz"];
+
+const POS_10_20 = {
+  "Fp1": [90, -18], "Fp2": [90, 18],
+  "F7":  [90, -54], "F3":  [63, -45], "Fz":  [45, 0], "F4":  [63, 45], "F8":  [90, 54],
+  "T7":  [90, -90], "C3":  [45, -90], "C4":  [45, 90], "T8":  [90, 90],
+  "P7":  [90, -126],"P3":  [63, -135],"Pz":  [45, 180],"P4":  [63, 135],"P8":  [90, 126],
+  "O1":  [90, -162], "O2":  [90, 162],
+  "Cz":  [0, 0],
+};
+
+function loboDe(nome) {
+  const n = nome.toUpperCase();
+  if (n[0] === "C") return "central";
+  if (n.startsWith("FP") || n[0] === "F") return "frontal";
+  if (n[0] === "T") return "temporal";
+  if (n[0] === "P") return "parietal";
+  if (n[0] === "O") return "occipital";
+  return "central";
+}
+const CORES_LOBO = { frontal: "#e8a33d", central: "#3dbb6e", parietal: "#6f8dd9", temporal: "#d15a7a", occipital: "#9a7fe0" };
+const CORES_LOBO_HEX = { frontal: 0xe8a33d, central: 0x3dbb6e, parietal: 0x6f8dd9, temporal: 0xd15a7a, occipital: 0x9a7fe0 };
+
+function dirEsfera(thetaDeg, phiDeg) {
+  const t = thetaDeg * Math.PI / 180, p = phiDeg * Math.PI / 180;
+  return new THREE.Vector3(Math.sin(t) * Math.sin(p), Math.cos(t), Math.sin(t) * Math.cos(p));
+}
+
+// =========================================================================
+// 2. FILTROS DE BANDA — biquad passa-faixa real por canal, envelope RMS
+//    por média exponencial. Decide quem "carrega" a banda por medição.
+// =========================================================================
+const FS = 500;
+const BANDAS = { delta: [1, 4], theta: [4, 8], alpha: [8, 13], beta: [13, 30], gamma: [30, 45] };
+let bandaAtiva = "alpha";
+
+function criarBiquad(f0, Q, fs) {
+  const w0 = (2 * Math.PI * f0) / fs;
+  const alpha = Math.sin(w0) / (2 * Q);
+  const b0 = Math.sin(w0) / 2, b2 = -Math.sin(w0) / 2;
+  const a0 = 1 + alpha, a1 = -2 * Math.cos(w0), a2 = 1 - alpha;
+  return { b0: b0/a0, b1: 0, b2: b2/a0, a1: a1/a0, a2: a2/a0, x1: 0, x2: 0, y1: 0, y2: 0 };
+}
+function aplicarBiquad(f, x) {
+  const y = f.b0 * x + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+  f.x2 = f.x1; f.x1 = x; f.y2 = f.y1; f.y1 = y;
+  return y;
+}
+
+const filtrosPorCanal = {};
+for (const nome of CANAIS_19) {
+  const porBanda = {};
+  for (const [b, [lo, hi]] of Object.entries(BANDAS)) {
+    const f0 = Math.sqrt(lo * hi);
+    const Q = f0 / (hi - lo);
+    porBanda[b] = { filtro: criarBiquad(f0, Q, FS), energia: 0 };
+  }
+  filtrosPorCanal[nome] = porBanda;
+}
+const ALPHA_EMA = 0.004;
+const potenciaBanda = {};
+for (const c of CANAIS_19) potenciaBanda[c] = { delta: 0, theta: 0, alpha: 0, beta: 0, gamma: 0 };
+
+function processarAmostra(nome, x, idx) {
+  const porBanda = filtrosPorCanal[nome];
+  for (const b of Object.keys(BANDAS)) {
+    const est = porBanda[b];
+    const y = aplicarBiquad(est.filtro, x);
+    est.energia += ALPHA_EMA * (y * y - est.energia);
+    potenciaBanda[nome][b] = Math.sqrt(est.energia);
+    historicoBanda[nome][b][idx] = y;
+  }
+}
+
+const relevancia = {};
+for (const c of CANAIS_19) relevancia[c] = 1;
+
+function atualizarRelevancias() {
+  let max = 0;
+  for (const c of CANAIS_19) max = Math.max(max, potenciaBanda[c][bandaAtiva]);
+  if (max <= 1e-9) { for (const c of CANAIS_19) relevancia[c] = 1; return; }
+  for (const c of CANAIS_19) relevancia[c] = potenciaBanda[c][bandaAtiva] / max;
+}
+
+// =========================================================================
+// 3. GERADOR DE SINAL SINTÉTICO — substituível por window.setEEGData
+// =========================================================================
+const FREQ_CENTRO = { delta: 2.5, theta: 6, alpha: 10, beta: 20, gamma: 38 };
+const PESO_LOBO_BANDA = {
+  delta:  { frontal: 0.5, central: 0.5, parietal: 0.5, temporal: 0.5, occipital: 0.5 },
+  theta:  { frontal: 1.0, central: 0.5, parietal: 0.4, temporal: 0.6, occipital: 0.3 },
+  alpha:  { frontal: 0.3, central: 0.4, parietal: 0.9, temporal: 0.4, occipital: 1.0 },
+  beta:   { frontal: 0.5, central: 1.0, parietal: 0.5, temporal: 0.4, occipital: 0.3 },
+  gamma:  { frontal: 0.4, central: 0.5, parietal: 0.4, temporal: 0.4, occipital: 0.4 },
+};
+
+let fonteExterna = null;
+let tGlobal = 0;
+
+function amostraSintetica(nome, t) {
+  const lobo = loboDe(nome);
+  let v = 0;
+  for (const banda of Object.keys(FREQ_CENTRO)) {
+    const amp = (PESO_LOBO_BANDA[banda][lobo] || 0.4) * (banda === bandaAtiva ? 1.6 : 0.5);
+    const f = FREQ_CENTRO[banda];
+    const faseCanal = (nome.charCodeAt(0) * 13 + nome.charCodeAt(nome.length - 1) * 7) % 100;
+    v += amp * Math.sin(2 * Math.PI * f * t + faseCanal);
+  }
+  v += (Math.random() - 0.5) * 0.9;
+  return v;
+}
+
+// 1200 (não 600) pra garantir folga real acima da maior janela do
+// formato clínico (30s) — com 600 o buffer só cobria ~32s no MELHOR
+// caso, então qualquer variação de frame rate deixava a janela de 30s
+// parcialmente vazia (lido como "tela cortada").
+const N_HIST = 1200;
+const historico = {};
+for (const c of CANAIS_19) historico[c] = new Float32Array(N_HIST);
+let ponteiroHist = 0;
+let totalAmostrasCommitadas = 0; // conta até N_HIST — usado pra saber quanto do buffer já tem dado de verdade (janela "só sinais" começa vazia)
+let pausado = false;
+
+// Instante travado ao clicar no traçado clínico (janela "Maximizar sinais")
+// — null = ao vivo. Sincronizado nas duas janelas pelo mesmo padrão de
+// comando+eco já usado por velocidadeSinal. Clicar SEMPRE pausa junto
+// (não é "3D congela, sinal continua"); destravar sempre limpa os dois
+// juntos, nunca fica preso sem querer.
+let tempoSelecionado = null;
+const hudTempoSelecionadoEl = document.getElementById("hud-tempo-selecionado");
+const hudTempoLabelEl = document.getElementById("hud-tempo-label");
+const tempoSelecionadoInfoEl = document.getElementById("tempo-selecionado-info");
+const tempoSelecionadoLabelEl = document.getElementById("tempo-selecionado-label");
+const btnPausaEl = document.getElementById("btn-pausa");
+
+function aplicarTempoPausado(tempo, pausadoNovo) {
+  tempoSelecionado = tempo;
+  pausado = pausadoNovo;
+  btnPausaEl.textContent = pausado ? "Retomar" : "Pausar";
+  btnPausaEl.classList.toggle("ativo", pausado);
+
+  const preso = tempoSelecionado !== null;
+  const rotulo = preso ? `Analisando t=${tempoSelecionado.toFixed(1)}s (pausado)` : "";
+  hudTempoSelecionadoEl.style.display = preso ? "flex" : "none";
+  hudTempoLabelEl.textContent = rotulo;
+  tempoSelecionadoInfoEl.classList.toggle("ativo", preso);
+  tempoSelecionadoLabelEl.textContent = rotulo;
+}
+
+document.getElementById("hud-tempo-voltar").addEventListener("click", () => {
+  aplicarTempoPausado(null, false);
+  if (canalSinais) canalSinais.postMessage({ tipo: "tempo-pausado", tempo: null, pausado: false });
+});
+document.getElementById("tempo-selecionado-voltar").addEventListener("click", () => {
+  aplicarTempoPausado(null, false);
+  if (canalSinais) canalSinais.postMessage({ tipo: "definir-tempo-pausado", tempo: null, pausado: false });
+});
+
+// tGlobal no instante de CADA amostra — usado pra desenhar o eixo X em
+// segundos de verdade na janela "só sinais" (formato clínico), em vez de
+// só contar posições no buffer (que não são igualmente espaçadas no
+// tempo real, já que dt varia por frame).
+const historicoTempo = new Float32Array(N_HIST);
+
+// Histórico do sinal JÁ FILTRADO por banda (não só a potência/RMS) — usado
+// pela aba "Canais (zoom)" pra desenhar a onda de cada banda de verdade,
+// em vez do sinal bruto com todas as bandas misturadas. O filtro em si já
+// era calculado a cada amostra pra medir potência; aqui só guardamos o
+// valor "y" que antes era descartado.
+const historicoBanda = {};
+for (const c of CANAIS_19) {
+  historicoBanda[c] = {};
+  for (const b of Object.keys(BANDAS)) historicoBanda[c][b] = new Float32Array(N_HIST);
+}
+
+// Referência ativa dos 19 canais — três opções, todas aplicadas por
+// cima do dado bruto que chega (sintético ou window.setEEGData):
+//
+//   "nativa"  — passthrough, sem transformação nenhuma. Para o CSV real
+//               (adhdata.csv) essa É a referência de fato gravada:
+//               linked-ears (A1/A2) — confirmado pela ficha técnica do
+//               dataset ("EEG Dataset for ADHD", Kaggle/IEEE DataPort).
+//               NÃO é Cz — Cz é só mais um dos 19 canais aqui, com
+//               valor real (não fica em 0µV).
+//   "cz"      — re-referencia de verdade: subtrai o valor de Cz de cada
+//               canal (Cz vira 0µV). É a mesma referência que o HBN usa
+//               nativamente.
+//   "average" — CAR (Common Average Reference): subtrai a média
+//               instantânea dos 19 canais (Cz já incluído nessa média,
+//               não é somado à parte).
+//
+// Repare: Cz JÁ está em CANAIS_19 desde a unificação da montagem com o
+// CSV — por isso a média do CAR usa CANAIS_19.length puro, sem "+1".
+let referenciaAtiva = "nativa";
+const TEXTOS_REFERENCIA = {
+  nativa: "Referência: nativa do dataset — no CSV real (adhdata.csv) é linked-ears (A1/A2); sem transformação aplicada.",
+  cz: "Referência: Cz — cada amostra menos o valor de Cz (Cz vira 0µV); é a mesma referência que o HBN usa nativamente.",
+  average: "Referência: Average (CAR) — cada amostra menos a média instantânea dos 19 canais.",
+};
+// Sufixo do rótulo clínico ("Fp1-Cz", "Fp1-Avg", "Fp1-Nativa") — reflete
+// a referência ativa de verdade, não fica hardcoded em "-Cz".
+function rotuloReferencia() {
+  if (referenciaAtiva === "cz") return "Cz";
+  if (referenciaAtiva === "average") return "Avg";
+  return "A1A2";
+}
+
+// Grava um conjunto de amostras (uma por canal, já referenciadas) no
+// histórico/filtros. Separado de passoSinal porque a janela "só sinais"
+// nunca gera amostra por conta própria — só recebe este mesmo formato
+// pelo BroadcastChannel e chama commitAmostras diretamente.
+function commitAmostras(referenciados, tempoAtual) {
+  for (const c of CANAIS_19) {
+    const v = referenciados[c];
+    historico[c][ponteiroHist] = v;
+    processarAmostra(c, v, ponteiroHist);
+  }
+  historicoTempo[ponteiroHist] = tempoAtual;
+  ponteiroHist = (ponteiroHist + 1) % N_HIST;
+  if (totalAmostrasCommitadas < N_HIST) totalAmostrasCommitadas++;
+  atualizarRelevancias();
+}
+
+function passoSinal(dt) {
+  if (pausado) return;
+  tGlobal += dt;
+
+  const brutos = {};
+  for (const c of CANAIS_19) brutos[c] = fonteExterna ? fonteExterna(c, tGlobal) : amostraSintetica(c, tGlobal);
+
+  let referenciados = brutos;
+  if (referenciaAtiva === "average") {
+    let soma = 0;
+    for (const c of CANAIS_19) soma += brutos[c]; // Cz já está em CANAIS_19, entra na soma normalmente
+    const media = soma / CANAIS_19.length;
+    referenciados = {};
+    for (const c of CANAIS_19) referenciados[c] = brutos[c] - media;
+  } else if (referenciaAtiva === "cz") {
+    const vCz = brutos["Cz"];
+    referenciados = {};
+    for (const c of CANAIS_19) referenciados[c] = brutos[c] - vCz;
+  }
+
+  commitAmostras(referenciados, tGlobal);
+  if (canalSinais && !somenteSinais) canalSinais.postMessage({ tipo: "amostra", referenciados, tGlobal });
+}
+
+if (canalSinais && !somenteSinais) {
+  // A janela "só sinais" pede o histórico já existente assim que abre —
+  // sem isso ela começa vazia e só recebe dali pra frente, o que fazia a
+  // tela parecer "cortada" por bastante tempo até acumular sozinha.
+  canalSinais.onmessage = (ev) => {
+    if (!ev.data) return;
+    if (ev.data.tipo === "pedir-historico") {
+      const historicoCopia = {};
+      for (const c of CANAIS_19) historicoCopia[c] = historico[c];
+      const historicoBandaCopia = {};
+      for (const c of CANAIS_19) {
+        historicoBandaCopia[c] = {};
+        for (const b of Object.keys(BANDAS)) historicoBandaCopia[c][b] = historicoBanda[c][b];
+      }
+      canalSinais.postMessage({
+        tipo: "historico-completo",
+        historico: historicoCopia,
+        historicoBanda: historicoBandaCopia,
+        historicoTempo,
+        ponteiroHist,
+        totalAmostrasCommitadas,
+        velocidade: velocidadeSinal,
+        tempoSelecionado,
+        pausado,
+      });
+    } else if (ev.data.tipo === "definir-velocidade") {
+      // a janela "só sinais" não gera sinal, então pede pra principal
+      // (aqui) mudar a velocidade de verdade; devolve o valor pra manter
+      // os dois sliders sincronizados nos dois sentidos.
+      velocidadeSinal = ev.data.valor;
+      aplicarVelocidadeUI(ev.data.valor);
+      canalSinais.postMessage({ tipo: "velocidade", valor: ev.data.valor });
+    } else if (ev.data.tipo === "definir-tempo-pausado") {
+      // idem, pro cursor de tempo: quem clicou foi a popup, mas só a
+      // principal controla pausado/passoSinal de verdade.
+      aplicarTempoPausado(ev.data.tempo, ev.data.pausado);
+      canalSinais.postMessage({ tipo: "tempo-pausado", tempo: ev.data.tempo, pausado: ev.data.pausado });
+    }
+  };
+}
+
+if (canalSinais && somenteSinais) {
+  canalSinais.onmessage = (ev) => {
+    if (!ev.data) return;
+    if (ev.data.tipo === "amostra") {
+      commitAmostras(ev.data.referenciados, ev.data.tGlobal);
+    } else if (ev.data.tipo === "historico-completo") {
+      for (const c of CANAIS_19) historico[c].set(ev.data.historico[c]);
+      for (const c of CANAIS_19) {
+        for (const b of Object.keys(BANDAS)) historicoBanda[c][b].set(ev.data.historicoBanda[c][b]);
+      }
+      historicoTempo.set(ev.data.historicoTempo);
+      ponteiroHist = ev.data.ponteiroHist;
+      totalAmostrasCommitadas = ev.data.totalAmostrasCommitadas;
+      aplicarVelocidadeUI(ev.data.velocidade);
+      aplicarTempoPausado(ev.data.tempoSelecionado, ev.data.pausado);
+    } else if (ev.data.tipo === "velocidade") {
+      aplicarVelocidadeUI(ev.data.valor);
+    } else if (ev.data.tipo === "tempo-pausado") {
+      aplicarTempoPausado(ev.data.tempo, ev.data.pausado);
+    }
+  };
+  canalSinais.postMessage({ tipo: "pedir-historico" });
+}
+function valorAtual(nome) {
+  const idx = (ponteiroHist - 1 + N_HIST) % N_HIST;
+  return historico[nome][idx];
+}
+
+// Índice do buffer cujo historicoTempo mais se aproxima de tempoAlvo —
+// varredura simples (buffer tem no máximo N_HIST=1200 amostras, custo
+// trivial), calculada 1x por frame em vez de 1x por canal.
+function indiceMaisProximoDoTempo(tempoAlvo) {
+  const n = Math.min(totalAmostrasCommitadas, N_HIST);
+  if (n === 0) return null;
+  let melhorIdx = null, melhorDist = Infinity;
+  for (let k = 0; k < n; k++) {
+    const idx = (ponteiroHist - n + k + N_HIST) % N_HIST;
+    const d = Math.abs(historicoTempo[idx] - tempoAlvo);
+    if (d < melhorDist) { melhorDist = d; melhorIdx = idx; }
+  }
+  return melhorIdx;
+}
+
+let indiceTempoSelecionadoCache = null;
+
+// Usada pela cor/brilho do cérebro 3D (aba Sensores): valor ao vivo
+// normalmente, ou o valor gravado no instante travado quando o usuário
+// clicou um ponto do traçado clínico na janela "Maximizar sinais".
+function valorParaVisualizacao(nome) {
+  if (tempoSelecionado === null || indiceTempoSelecionadoCache === null) return valorAtual(nome);
+  return historico[nome][indiceTempoSelecionadoCache];
+}
+
+// =========================================================================
+// 4. PAINEL DE TRAÇADOS
+// =========================================================================
+const cvT = document.getElementById("canvas-tracos");
+const ctxT = cvT.getContext("2d");
+let larguraT = 0, alturaT = 0, dprT = 1;
+
+function medirTracos() {
+  dprT = Math.min(devicePixelRatio || 1, 2);
+  const r = cvT.parentElement.getBoundingClientRect();
+  larguraT = Math.max(1, Math.round(r.width));
+  alturaT = Math.max(1, Math.round(r.height));
+  cvT.width = Math.round(larguraT * dprT);
+  cvT.height = Math.round(alturaT * dprT);
+  ctxT.setTransform(dprT, 0, 0, dprT, 0, 0);
+}
+medirTracos();
+addEventListener("resize", medirTracos);
+
+let canalRealcado = null;
+
+function desenharTracos() {
+  ctxT.clearRect(0, 0, larguraT, alturaT);
+  const nCanais = CANAIS_19.length;
+  const alturaFaixa = alturaT / nCanais;
+  const margemEsq = 46;
+
+  ctxT.font = "500 11px 'Segoe UI', system-ui, sans-serif";
+  ctxT.textBaseline = "middle";
+
+  for (let i = 0; i < nCanais; i++) {
+    const nome = CANAIS_19[i];
+    const yCentro = i * alturaFaixa + alturaFaixa / 2;
+    const cor = CORES_LOBO[loboDe(nome)];
+    const destaque = canalRealcado === nome;
+    const rel = relevancia[nome];
+    const apagado = canalRealcado && !destaque && rel < LIMIAR_RELEVANCIA;
+
+    ctxT.strokeStyle = "rgba(154,166,191,0.06)";
+    ctxT.lineWidth = 1;
+    ctxT.beginPath(); ctxT.moveTo(margemEsq, yCentro); ctxT.lineTo(larguraT, yCentro); ctxT.stroke();
+
+    ctxT.fillStyle = destaque ? "#eef3fb" : apagado ? "#3a4150" : cor;
+    ctxT.textAlign = "right";
+    ctxT.fillText(nome, margemEsq - 8, yCentro);
+
+    const buf = historico[nome];
+    const escalaX = (larguraT - margemEsq) / N_HIST;
+
+    // autoescala por canal — antes era uma constante fixa (0.14) tunada só
+    // pro sinal sintético (~1-5); com dado real do CSV (~100-500) ficava
+    // cortado fora da tela. Assim funciona com qualquer unidade/amplitude.
+    let pico = 1e-6;
+    for (let k = 0; k < N_HIST; k++) pico = Math.max(pico, Math.abs(buf[k]));
+    const escalaY = (alturaFaixa * 0.42) / pico;
+
+    ctxT.strokeStyle = destaque ? "#ffffff" : apagado ? "#2c3240" : cor;
+    ctxT.globalAlpha = destaque ? 1 : apagado ? 0.35 : 0.72;
+    ctxT.lineWidth = destaque ? 1.6 : 1;
+    ctxT.beginPath();
+    for (let k = 0; k < N_HIST; k++) {
+      const idx = (ponteiroHist + k) % N_HIST;
+      const x = margemEsq + k * escalaX;
+      const y = yCentro - buf[idx] * escalaY;
+      if (k === 0) ctxT.moveTo(x, y); else ctxT.lineTo(x, y);
+    }
+    ctxT.stroke();
+    ctxT.globalAlpha = 1;
+  }
+}
+
+// =========================================================================
+// 4b. ABA "CANAIS (ZOOM)" — poucos canais escolhidos à mão, sinal JÁ
+//    FILTRADO na banda escolhida (não o bruto), com autoescala por canal
+//    pra sempre preencher quase toda a altura disponível — "escala alta"
+//    vale tanto pro sinal sintético quanto pra dado real via
+//    window.setEEGData, não importa a unidade.
+// =========================================================================
+let modoTracos = "todos"; // "todos" | "zoom"
+const canaisZoomSelecionados = new Set();
+let bandaZoomAtiva = "alpha";
+
+const zoomCanaisEl = document.getElementById("zoom-canais");
+for (const nome of CANAIS_19) {
+  const label = document.createElement("label");
+  label.className = "zoom-canal-item";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.dataset.canal = nome;
+  cb.addEventListener("change", () => {
+    if (cb.checked) canaisZoomSelecionados.add(nome);
+    else canaisZoomSelecionados.delete(nome);
+  });
+  label.appendChild(cb);
+  label.appendChild(document.createTextNode(nome));
+  zoomCanaisEl.appendChild(label);
+}
+
+document.getElementById("zoom-marcar-todos").addEventListener("click", () => {
+  for (const nome of CANAIS_19) canaisZoomSelecionados.add(nome);
+  zoomCanaisEl.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = true; });
+});
+document.getElementById("zoom-desmarcar-todos").addEventListener("click", () => {
+  canaisZoomSelecionados.clear();
+  zoomCanaisEl.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = false; });
+});
+
+const btnAbaTracosTodos = document.getElementById("aba-tracos-todos");
+const btnAbaTracosZoom = document.getElementById("aba-tracos-zoom");
+const zoomControlesEl = document.getElementById("zoom-controles");
+
+function ativarAbaTracos(modo) {
+  modoTracos = modo;
+  btnAbaTracosTodos.classList.toggle("ativo", modo === "todos");
+  btnAbaTracosZoom.classList.toggle("ativo", modo === "zoom");
+  zoomControlesEl.style.display = modo === "zoom" ? "block" : "none";
+}
+btnAbaTracosTodos.addEventListener("click", () => ativarAbaTracos("todos"));
+btnAbaTracosZoom.addEventListener("click", () => ativarAbaTracos("zoom"));
+
+document.getElementById("zoom-banda").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-zbanda]");
+  if (!btn) return;
+  document.querySelectorAll("#zoom-banda button").forEach((b) => b.classList.remove("ativo"));
+  btn.classList.add("ativo");
+  bandaZoomAtiva = btn.dataset.zbanda;
+});
+
+// Abre esta mesma página numa janela nova, só com os sinais (ver bloco
+// "0b" no topo do script) — carrega já com os canais/banda que estavam
+// marcados aqui, pra não ter que remarcar.
+document.getElementById("zoom-maximizar").addEventListener("click", () => {
+  const params = new URLSearchParams({
+    janela: "sinais",
+    canais: Array.from(canaisZoomSelecionados).join(","),
+    banda: bandaZoomAtiva,
+  });
+  window.open(`${location.pathname}?${params.toString()}`, "_blank", "width=900,height=700");
+});
+
+// Na janela "só sinais": aplica os canais/banda vindos da URL e já entra
+// direto na aba de zoom (não faz sentido abrir mostrando "Todos" com o
+// painel 3D escondido).
+if (somenteSinais) {
+  const canaisIniciais = (PARAMS_URL.get("canais") || "").split(",").filter(Boolean);
+  for (const nome of canaisIniciais) {
+    canaisZoomSelecionados.add(nome);
+    const cb = zoomCanaisEl.querySelector(`input[data-canal="${nome}"]`);
+    if (cb) cb.checked = true;
+  }
+  const bandaInicial = PARAMS_URL.get("banda");
+  if (bandaInicial && BANDAS[bandaInicial]) {
+    bandaZoomAtiva = bandaInicial;
+    document.querySelectorAll("#zoom-banda button").forEach((b) => b.classList.toggle("ativo", b.dataset.zbanda === bandaInicial));
+  }
+  ativarAbaTracos("zoom");
+}
+
+function desenharTracosZoom() {
+  ctxT.clearRect(0, 0, larguraT, alturaT);
+  const margemEsq = 46;
+  ctxT.font = "500 11px 'Segoe UI', system-ui, sans-serif";
+  ctxT.textBaseline = "middle";
+
+  const canais = CANAIS_19.filter((c) => canaisZoomSelecionados.has(c));
+  if (!canais.length) {
+    ctxT.fillStyle = "#7f8ba1";
+    ctxT.textAlign = "center";
+    ctxT.font = "500 12px 'Segoe UI', system-ui, sans-serif";
+    ctxT.fillText("marque pelo menos 1 canal acima", larguraT / 2, alturaT / 2);
+    return;
+  }
+
+  const nCanais = canais.length;
+  const alturaFaixa = alturaT / nCanais;
+  const escalaX = (larguraT - margemEsq) / N_HIST;
+
+  for (let i = 0; i < nCanais; i++) {
+    const nome = canais[i];
+    const yCentro = i * alturaFaixa + alturaFaixa / 2;
+    const cor = CORES_LOBO[loboDe(nome)];
+
+    ctxT.strokeStyle = "rgba(154,166,191,0.06)";
+    ctxT.lineWidth = 1;
+    ctxT.beginPath(); ctxT.moveTo(margemEsq, yCentro); ctxT.lineTo(larguraT, yCentro); ctxT.stroke();
+
+    ctxT.fillStyle = cor;
+    ctxT.textAlign = "right";
+    ctxT.fillText(nome, margemEsq - 8, yCentro);
+
+    const buf = historicoBanda[nome][bandaZoomAtiva];
+
+    // autoescala: pico absoluto na janela visível vira a régua — assim
+    // o traçado sempre preenche quase toda a altura da faixa, não
+    // importa a amplitude real da banda filtrada.
+    let pico = 1e-6;
+    for (let k = 0; k < N_HIST; k++) pico = Math.max(pico, Math.abs(buf[k]));
+    const escalaY = (alturaFaixa * 0.46) / pico;
+
+    ctxT.strokeStyle = cor;
+    ctxT.globalAlpha = 0.85;
+    ctxT.lineWidth = 1.4;
+    ctxT.beginPath();
+    for (let k = 0; k < N_HIST; k++) {
+      const idx = (ponteiroHist + k) % N_HIST;
+      const x = margemEsq + k * escalaX;
+      const y = yCentro - buf[idx] * escalaY;
+      if (k === 0) ctxT.moveTo(x, y); else ctxT.lineTo(x, y);
+    }
+    ctxT.stroke();
+    ctxT.globalAlpha = 1;
+  }
+}
+
+// =========================================================================
+// 4c. FORMATO CLÍNICO — só na janela "Maximizar sinais" (somenteSinais).
+//    Eixo X em segundos de verdade (via historicoTempo, não posição no
+//    buffer), rótulo "Canal-Cz"/"Canal-Avg" conforme a referência ativa,
+//    e o pico de cada canal escrito por baixo do rótulo em vez de uma
+//    barra de calibração única — como cada canal já tem autoescala
+//    própria, uma barra compartilhada não representaria a escala real de
+//    nenhum canal específico.
+// =========================================================================
+function desenharTracosClinico() {
+  ctxT.clearRect(0, 0, larguraT, alturaT);
+  const margemEsq = 78;
+  const margemTopo = 22;
+
+  const canais = CANAIS_19.filter((c) => canaisZoomSelecionados.has(c));
+  if (!canais.length) {
+    ctxT.fillStyle = "#7f8ba1";
+    ctxT.textAlign = "center";
+    ctxT.textBaseline = "middle";
+    ctxT.font = "500 12px 'Segoe UI', system-ui, sans-serif";
+    ctxT.fillText("marque pelo menos 1 canal acima", larguraT / 2, alturaT / 2);
+    return;
+  }
+
+  if (totalAmostrasCommitadas === 0) {
+    ctxT.fillStyle = "#7f8ba1";
+    ctxT.textAlign = "center";
+    ctxT.textBaseline = "middle";
+    ctxT.font = "500 12px 'Segoe UI', system-ui, sans-serif";
+    ctxT.fillText("aguardando sinal…", larguraT / 2, alturaT / 2);
+    return;
+  }
+
+  const idxMaisRecente = (ponteiroHist - 1 + N_HIST) % N_HIST;
+  const tAtual = historicoTempo[idxMaisRecente];
+  const janelaS = parseFloat(document.getElementById("clinico-escala-select").value) || 10;
+  const tInicio = tAtual - janelaS;
+  const xDoTempo = (t) => margemEsq + ((t - tInicio) / janelaS) * (larguraT - margemEsq);
+
+  // o buffer pode ainda não ter dado suficiente pra cobrir a janela
+  // inteira (a janela "só sinais" sempre começa vazia — não herda o
+  // passado da principal). tInicioReal marca onde o dado de VERDADE
+  // começa, pra não desenhar grade/traço sobre um trecho sem nada
+  // (o que antes parecia "tela cortada").
+  const idxMaisAntigo = (ponteiroHist - totalAmostrasCommitadas + N_HIST) % N_HIST;
+  const tPrimeiraAmostra = historicoTempo[idxMaisAntigo];
+  const tInicioReal = Math.max(tInicio, tPrimeiraAmostra);
+
+  // guarda o mapeamento tempo↔pixel deste frame pro clique no canvas
+  // conseguir inverter (pixel clicado -> instante) — ver listener de
+  // clique mais abaixo no script.
+  ultimoMapeamentoClinico = { tInicio, janelaS, margemEsq, larguraDisponivel: larguraT - margemEsq, tAtual, tInicioReal };
+
+  // grade vertical + número do segundo no topo
+  ctxT.textBaseline = "middle";
+  ctxT.textAlign = "center";
+  ctxT.font = "500 10px 'Segoe UI', system-ui, sans-serif";
+  const primeiroSegundo = Math.ceil(tInicioReal);
+  for (let s = primeiroSegundo; s <= tAtual; s++) {
+    const x = xDoTempo(s);
+    if (x < margemEsq || x > larguraT) continue;
+    ctxT.strokeStyle = "rgba(154,166,191,0.14)";
+    ctxT.setLineDash([3, 3]);
+    ctxT.beginPath();
+    ctxT.moveTo(x, margemTopo);
+    ctxT.lineTo(x, alturaT);
+    ctxT.stroke();
+    ctxT.setLineDash([]);
+    ctxT.fillStyle = "#7f8ba1";
+    ctxT.fillText(String(Math.round(s)), x, margemTopo / 2 + 2);
+  }
+
+  const nCanais = canais.length;
+  const alturaFaixa = (alturaT - margemTopo) / nCanais;
+  const rotuloRef = rotuloReferencia();
+
+  for (let i = 0; i < nCanais; i++) {
+    const nome = canais[i];
+    const yCentro = margemTopo + i * alturaFaixa + alturaFaixa / 2;
+    const cor = CORES_LOBO[loboDe(nome)];
+    const buf = historicoBanda[nome][bandaZoomAtiva];
+
+    ctxT.strokeStyle = "rgba(154,166,191,0.08)";
+    ctxT.lineWidth = 1;
+    ctxT.beginPath(); ctxT.moveTo(margemEsq, yCentro); ctxT.lineTo(larguraT, yCentro); ctxT.stroke();
+
+    // autoescala calculada só dentro do trecho com dado de verdade
+    let pico = 1e-6;
+    for (let k = 0; k < N_HIST; k++) {
+      if (historicoTempo[k] >= tInicioReal && historicoTempo[k] <= tAtual) pico = Math.max(pico, Math.abs(buf[k]));
+    }
+    const escalaY = (alturaFaixa * 0.42) / pico;
+
+    ctxT.textAlign = "right";
+    ctxT.fillStyle = cor;
+    ctxT.font = "500 11px 'Segoe UI', system-ui, sans-serif";
+    ctxT.fillText(`${nome}-${rotuloRef}`, margemEsq - 10, yCentro - 6);
+    ctxT.fillStyle = "#5a6478";
+    ctxT.font = "400 8.5px 'Segoe UI', system-ui, sans-serif";
+    ctxT.fillText(`pico ±${pico.toFixed(1)}`, margemEsq - 10, yCentro + 8);
+
+    ctxT.strokeStyle = cor;
+    ctxT.globalAlpha = 0.9;
+    ctxT.lineWidth = 1.3;
+    ctxT.beginPath();
+    let comecou = false;
+    for (let k = 0; k < N_HIST; k++) {
+      const idx = (ponteiroHist + k) % N_HIST;
+      const t = historicoTempo[idx];
+      if (t < tInicioReal || t > tAtual) continue;
+      const x = xDoTempo(t);
+      const y = yCentro - buf[idx] * escalaY;
+      if (!comecou) { ctxT.moveTo(x, y); comecou = true; } else { ctxT.lineTo(x, y); }
+    }
+    ctxT.stroke();
+    ctxT.globalAlpha = 1;
+  }
+
+  // marcador do instante travado (clicou no traçado) — desenha por cima
+  // de tudo, mesmo com o sinal pausado/congelado
+  if (tempoSelecionado !== null && tempoSelecionado >= tInicioReal && tempoSelecionado <= tAtual) {
+    const xSel = xDoTempo(tempoSelecionado);
+    ctxT.strokeStyle = "#eef3fb";
+    ctxT.lineWidth = 2;
+    ctxT.setLineDash([]);
+    ctxT.beginPath();
+    ctxT.moveTo(xSel, margemTopo);
+    ctxT.lineTo(xSel, alturaT);
+    ctxT.stroke();
+  }
+}
+
+// Clique no traçado clínico trava (e pausa) nesse instante — só faz
+// sentido na sub-aba "Traçados clínicos" da janela "Maximizar sinais";
+// nos outros contextos o mapeamento não existe (ultimoMapeamentoClinico
+// fica null) e o clique é ignorado.
+let ultimoMapeamentoClinico = null;
+document.getElementById("canvas-tracos").addEventListener("click", (e) => {
+  if (!somenteSinais || modoJanelaSinais !== "tracados" || !ultimoMapeamentoClinico) return;
+  const rect = cvT.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const { tInicio, janelaS, margemEsq, larguraDisponivel, tAtual, tInicioReal } = ultimoMapeamentoClinico;
+  if (x < margemEsq) return;
+  let tempoAlvo = tInicio + ((x - margemEsq) / larguraDisponivel) * janelaS;
+  tempoAlvo = Math.max(tInicioReal, Math.min(tAtual, tempoAlvo));
+  aplicarTempoPausado(tempoAlvo, true);
+  if (canalSinais) canalSinais.postMessage({ tipo: "definir-tempo-pausado", tempo: tempoAlvo, pausado: true });
+});
+
+// =========================================================================
+// 4d. ANÁLISE TDAH — só dentro da janela "Maximizar sinais" (somenteSinais).
+//    Quatro painéis descritivos (não diagnósticos), baseados no artigo
+//    "Use of EEG to Diagnose ADHD" (PMC4633088): Theta/Beta Ratio, perfil
+//    espectral multi-banda, sincronização entre canais (aproximação por
+//    correlação no tempo — não é coerência espectral completa) e
+//    dimensão fractal de Higuchi. Os ERPs do artigo (P3/N2/ERN/P2/FRN)
+//    ficam de fora: exigem marcador de evento/estímulo no tempo, e o
+//    adhdata.csv não tem essa coluna.
+//
+//    Tudo calculado sobre o buffer JÁ existente (historico/historicoBanda),
+//    sem depender de potenciaBanda (que é uma EMA "vazia" logo que a
+//    janela abre, já que o handshake de histórico não a transmite) —
+//    janelaValida() lê os totalAmostrasCommitadas mais recentes, em
+//    ordem cronológica, do array circular.
+// =========================================================================
+let modoJanelaSinais = "tracados"; // "tracados" | "analise"
+const btnJanelaTracados = document.getElementById("aba-janela-tracados");
+const btnJanelaAnalise = document.getElementById("aba-janela-analise");
+const canvasTracosWrapEl = document.getElementById("canvas-tracos-wrap");
+const analiseTdahEl = document.getElementById("analise-tdah");
+
+function ativarAbaJanelaSinais(modo) {
+  modoJanelaSinais = modo;
+  btnJanelaTracados.classList.toggle("ativo", modo === "tracados");
+  btnJanelaAnalise.classList.toggle("ativo", modo === "analise");
+  canvasTracosWrapEl.style.display = modo === "tracados" ? "block" : "none";
+  analiseTdahEl.style.display = modo === "analise" ? "flex" : "none";
+}
+btnJanelaTracados.addEventListener("click", () => ativarAbaJanelaSinais("tracados"));
+btnJanelaAnalise.addEventListener("click", () => ativarAbaJanelaSinais("analise"));
+
+function janelaValida(buf) {
+  const n = Math.min(totalAmostrasCommitadas, N_HIST);
+  if (n === 0) return new Float32Array(0);
+  const inicio = (ponteiroHist - n + N_HIST) % N_HIST;
+  const resultado = new Float32Array(n);
+  for (let k = 0; k < n; k++) resultado[k] = buf[(inicio + k) % N_HIST];
+  return resultado;
+}
+
+// Só os valores dentro de [tempoAlvo - duracaoJanela/2, tempoAlvo +
+// duracaoJanela/2] — usado quando um instante está travado, pra
+// Análise TDAH focar no pico clicado em vez do buffer inteiro.
+function janelaComTempo(buf, tempoAlvo, duracaoJanela) {
+  const meia = duracaoJanela / 2;
+  const tMin = tempoAlvo - meia, tMax = tempoAlvo + meia;
+  const n = Math.min(totalAmostrasCommitadas, N_HIST);
+  const valores = [];
+  for (let k = 0; k < n; k++) {
+    const idx = (ponteiroHist - n + k + N_HIST) % N_HIST;
+    const t = historicoTempo[idx];
+    if (t >= tMin && t <= tMax) valores.push(buf[idx]);
+  }
+  return Float32Array.from(valores);
+}
+
+// Dispatcher usado pelas 4 métricas de Análise TDAH: janela curta (~3s)
+// ao redor do instante travado, ou o buffer inteiro válido ao vivo.
+function janela(buf) {
+  return tempoSelecionado !== null ? janelaComTempo(buf, tempoSelecionado, 3) : janelaValida(buf);
+}
+
+function potenciaRMS(serie) {
+  if (!serie.length) return 0;
+  let soma = 0;
+  for (let i = 0; i < serie.length; i++) soma += serie[i] * serie[i];
+  return Math.sqrt(soma / serie.length);
+}
+
+function correlacao(a, b) {
+  const n = Math.min(a.length, b.length);
+  if (n < 2) return 0;
+  let mediaA = 0, mediaB = 0;
+  for (let i = 0; i < n; i++) { mediaA += a[i]; mediaB += b[i]; }
+  mediaA /= n; mediaB /= n;
+  let num = 0, denA = 0, denB = 0;
+  for (let i = 0; i < n; i++) {
+    const da = a[i] - mediaA, db = b[i] - mediaB;
+    num += da * db; denA += da * da; denB += db * db;
+  }
+  const den = Math.sqrt(denA * denB);
+  return den > 1e-12 ? num / den : 0;
+}
+
+// Higuchi Fractal Dimension: mede a complexidade de uma série temporal
+// pela inclinação de log(comprimento médio da curva) vs log(1/k), pra
+// vários fatores de subamostragem k. N precisa ser bem maior que kMax
+// pra estimativa fazer sentido — com pouco dado devolve NaN em vez de
+// um número enganoso.
+function dimensaoFractalHiguchi(serie, kMax = 6) {
+  const N = serie.length;
+  if (N < kMax * 4) return NaN;
+  const logL = [], logInvK = [];
+  for (let k = 1; k <= kMax; k++) {
+    let Lk = 0;
+    for (let m = 0; m < k; m++) {
+      let soma = 0, n = 0;
+      for (let i = m + k; i < N; i += k) { soma += Math.abs(serie[i] - serie[i - k]); n++; }
+      if (n > 0) Lk += (soma * (N - 1)) / (n * k * k);
+    }
+    const media = Lk / k;
+    if (media > 0) { logL.push(Math.log(media)); logInvK.push(Math.log(1 / k)); }
+  }
+  const n = logL.length;
+  if (n < 2) return NaN;
+  const mediaX = logInvK.reduce((a, b) => a + b, 0) / n;
+  const mediaY = logL.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = logInvK[i] - mediaX, dy = logL[i] - mediaY;
+    num += dx * dy; den += dx * dx;
+  }
+  return den > 0 ? num / den : NaN;
+}
+
+const CORES_BANDA_ANALISE = { delta: "#6f8dd9", theta: "#9a7fe0", alpha: "#3dbb6e", beta: "#e8a33d", gamma: "#d15a7a" };
+
+let ultimaAtualizacaoAnalise = 0;
+function atualizarAnaliseTDAH() {
+  const agora = performance.now();
+  if (agora - ultimaAtualizacaoAnalise < 800) return;
+  ultimaAtualizacaoAnalise = agora;
+
+  const canais = CANAIS_19.filter((c) => canaisZoomSelecionados.has(c));
+  const tbrEl = document.getElementById("tbr-barras");
+  const espectralEl = document.getElementById("espectral-grafico");
+  const coerenciaEl = document.getElementById("coerencia-matriz");
+  const fractalEl = document.getElementById("fractal-barras");
+  document.getElementById("coerencia-banda-label").textContent = `(banda ativa: ${bandaZoomAtiva})`;
+
+  const janelaInfoEl = document.getElementById("analise-janela-info");
+  if (tempoSelecionado !== null) {
+    janelaInfoEl.style.display = "block";
+    janelaInfoEl.textContent = `Analisando o instante travado t=${tempoSelecionado.toFixed(1)}s (janela de ±1.5s ao redor, em vez do buffer inteiro).`;
+  } else {
+    janelaInfoEl.style.display = "none";
+  }
+
+  if (!canais.length) {
+    const msg = '<p style="color:#7f8ba1;font-size:11px;margin:0;">marque pelo menos 1 canal acima</p>';
+    tbrEl.innerHTML = msg;
+    espectralEl.innerHTML = msg;
+    coerenciaEl.style.gridTemplateColumns = ""; // reseta o grid de uma renderização anterior, senão o aviso quebra célula a célula
+    coerenciaEl.innerHTML = msg;
+    fractalEl.innerHTML = msg;
+    return;
+  }
+
+  // --- Theta/Beta Ratio ---
+  const tbrValores = canais.map((c) => {
+    const theta = potenciaRMS(janela(historicoBanda[c]["theta"]));
+    const beta = potenciaRMS(janela(historicoBanda[c]["beta"]));
+    return { c, valor: theta / (beta + 1e-6) };
+  });
+  const tbrMax = Math.max(1e-6, ...tbrValores.map((v) => v.valor));
+  tbrEl.innerHTML = tbrValores.map(({ c, valor }) => {
+    const pct = Math.min(100, (valor / tbrMax) * 100);
+    const cor = CORES_LOBO[loboDe(c)];
+    return `<div class="analise-barra-linha"><span>${c}</span><div class="analise-barra-fundo">` +
+      `<div class="analise-barra-preenchimento" style="width:${pct}%;background:${cor}"></div></div>` +
+      `<span>${valor.toFixed(2)}</span></div>`;
+  }).join("");
+
+  // --- Perfil espectral (5 bandas por canal) ---
+  const bandas = Object.keys(BANDAS);
+  espectralEl.innerHTML = canais.map((c) => {
+    const potencias = bandas.map((b) => potenciaRMS(janela(historicoBanda[c][b])));
+    const maxC = Math.max(1e-6, ...potencias);
+    const barrasHtml = bandas.map((b, i) => {
+      const pct = Math.max(4, (potencias[i] / maxC) * 100);
+      return `<div class="analise-espectral-banda" style="height:${pct}%;background:${CORES_BANDA_ANALISE[b]}" title="${b}: ${potencias[i].toFixed(2)}"></div>`;
+    }).join("");
+    return `<div class="analise-espectral-canal"><span>${c}</span><div class="analise-espectral-bandas">${barrasHtml}</div></div>`;
+  }).join("");
+
+  // --- Sincronização entre canais (correlação da banda ativa) ---
+  const n = canais.length;
+  coerenciaEl.style.gridTemplateColumns = `36px repeat(${n}, 1fr)`;
+  const janelas = canais.map((c) => janela(historicoBanda[c][bandaZoomAtiva]));
+  let matrizHtml = "<div></div>" + canais.map((c) => `<div class="analise-matriz-rotulo">${c}</div>`).join("");
+  for (let i = 0; i < n; i++) {
+    matrizHtml += `<div class="analise-matriz-rotulo">${canais[i]}</div>`;
+    for (let j = 0; j < n; j++) {
+      const r = i === j ? 1 : correlacao(janelas[i], janelas[j]);
+      const [cr, cg, cb] = corPorAmplitude((r + 1) / 2); // -1..1 -> 0..1
+      matrizHtml += `<div class="analise-matriz-celula" style="background:rgb(${(cr*255)|0},${(cg*255)|0},${(cb*255)|0})" ` +
+        `title="${canais[i]}×${canais[j]}: ${r.toFixed(2)}">${r.toFixed(1)}</div>`;
+    }
+  }
+  coerenciaEl.innerHTML = matrizHtml;
+
+  // --- Dimensão fractal (Higuchi, sinal bruto) ---
+  const fractalValores = canais.map((c) => ({ c, valor: dimensaoFractalHiguchi(janela(historico[c])) }));
+  fractalEl.innerHTML = fractalValores.map(({ c, valor }) => {
+    const valido = !Number.isNaN(valor);
+    const pct = valido ? Math.min(100, Math.max(0, ((valor - 1) / 1) * 100)) : 0;
+    const cor = CORES_LOBO[loboDe(c)];
+    return `<div class="analise-barra-linha"><span>${c}</span><div class="analise-barra-fundo">` +
+      `<div class="analise-barra-preenchimento" style="width:${pct}%;background:${cor}"></div></div>` +
+      `<span>${valido ? valor.toFixed(2) : "—"}</span></div>`;
+  }).join("");
+}
+
+// =========================================================================
+// 5. CENA 3D
+// =========================================================================
+const cv3 = document.getElementById("canvas-3d");
+let scene, camera, renderer, controls, raycaster, mouse;
+const tooltip = document.getElementById("tooltip");
+const statusEl = document.getElementById("status");
+const carregandoEl = document.getElementById("carregando");
+
+scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0f17);
+scene.fog = new THREE.Fog(0x0b0f17, 14, 42);
+
+function medir3D() {
+  if (somenteSinais) return; // painel 3D escondido, sem tamanho útil pra medir
+  const r = cv3.parentElement.getBoundingClientRect();
+  camera.aspect = r.width / r.height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(r.width, r.height);
+}
+
+camera = new THREE.PerspectiveCamera(45, 1, 0.05, 100);
+camera.position.set(1.6, 1.0, 2.7);
+
+renderer = new THREE.WebGLRenderer({ canvas: cv3, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.4;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dl = new THREE.DirectionalLight(0xffffff, 0.75);
+dl.position.set(3, 5, 4);
+scene.add(dl);
+const dl2 = new THREE.DirectionalLight(0xffffff, 0.35);
+dl2.position.set(-3, -2, -4);
+scene.add(dl2);
+
+raycaster = new THREE.Raycaster();
+raycaster.params.Points = { threshold: 0.02 };
+mouse = new THREE.Vector2();
+
+// =========================================================================
+// 6. CARREGAR O MESH REAL (brain.obj) e vertex-colorir por potência
+// =========================================================================
+let malhaCerebro = null;
+let posicoesVertices = null; // Float32Array local-space (após centralizar)
+let coresVertices = null;    // Float32Array RGB por vértice
+let bboxCerebro = null;
+
+// Na janela "só sinais" o painel 3D fica escondido (CSS), então nem vale
+// baixar/parsear o brain.obj (1.5MB) — poupa banda e CPU à toa.
+if (!somenteSinais) {
+const loader = new THREE.OBJLoader();
+loader.load(
+  CAMINHO_BRAIN_OBJ,
+  (obj) => {
+    let malha = null;
+    obj.traverse((child) => { if (child.isMesh) malha = child; });
+    if (!malha) { console.error("Nenhum mesh encontrado dentro do OBJ."); return; }
+
+    const geo = malha.geometry.index ? malha.geometry.toNonIndexed() : malha.geometry;
+    geo.computeBoundingBox();
+    bboxCerebro = geo.boundingBox.clone();
+    const centro = new THREE.Vector3();
+    bboxCerebro.getCenter(centro);
+
+    // centraliza a geometria na origem (facilita câmera e cálculo de eletrodos)
+    geo.translate(-centro.x, -centro.y, -centro.z);
+    geo.computeBoundingBox();
+    bboxCerebro = geo.boundingBox.clone();
+
+    const nVerts = geo.attributes.position.count;
+    posicoesVertices = geo.attributes.position.array;
+    coresVertices = new Float32Array(nVerts * 3);
+    for (let i = 0; i < nVerts * 3; i++) coresVertices[i] = 0.35;
+    geo.setAttribute("color", new THREE.BufferAttribute(coresVertices, 3));
+    geo.computeVertexNormals();
+
+    const mat = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.55, metalness: 0.05,
+      emissive: 0x000000, emissiveIntensity: 0,
+      transparent: true, opacity: 0.7, // ~30% translúcido
+      side: THREE.DoubleSide, // com opacidade < 1, o interior/verso também precisa renderizar
+      depthWrite: false, // evita que faces internas "sumam" atrás de faces translúcidas
+    });
+
+    malhaCerebro = new THREE.Mesh(geo, mat);
+    scene.add(malhaCerebro);
+
+    posicionarEletrodos();
+    ajustarCameraParaMalha(malhaCerebro);
+    carregandoEl.style.display = "none";
+  },
+  undefined,
+  (err) => {
+    carregandoEl.innerHTML =
+      `<div style="max-width:280px;text-align:center;line-height:1.6">` +
+      `Não consegui carregar <code>${CAMINHO_BRAIN_OBJ}</code>.<br>` +
+      `<span style="color:#7f8ba1;font-size:11.5px">Abra este arquivo por um servidor local ` +
+      `(ex: <code>python -m http.server</code>) a partir da pasta do projeto, não por duplo-clique.</span></div>`;
+    console.error(err);
+  }
+);
+}
+
+// =========================================================================
+// 7. ELETRODOS — posicionados na superfície do MESH REAL, projetando cada
+//    direção 10-20 a partir do centro do cérebro até acertar a casca
+//    externa (raycasting contra a própria geometria carregada).
+//    PARADOS: nenhuma posição se move sozinha. O único movimento é o
+//    brilho/emissão/escala reagindo à amostra atual e ao hover.
+// =========================================================================
+const eletrodos = [];
+const grupoEletrodos = new THREE.Group();
+scene.add(grupoEletrodos);
+
+function textoSprite(texto, corHex) {
+  const c = document.createElement("canvas");
+  c.width = 256; c.height = 96;
+  const g = c.getContext("2d");
+  g.font = "600 44px 'Segoe UI', system-ui, sans-serif";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.shadowColor = "rgba(0,0,0,0.9)"; g.shadowBlur = 10;
+  g.fillStyle = "#" + corHex.toString(16).padStart(6, "0");
+  g.fillText(texto, 128, 48);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const spr = new THREE.Sprite(mat);
+  spr.scale.set(0.09, 0.034, 1);
+  return spr;
+}
+
+// Gira "dir" por um pequeno ângulo em duas direções ortogonais a ele —
+// usado para amostrar um pequeno cone ao redor do azimute alvo, em vez de
+// um único raio. Isso é o que evita cair na fissura longitudinal (ou em
+// qualquer outra reentrância pontual): um raio isolado pode furar direto
+// numa dobra da casca; vários raios próximos, tomando a distância mediana,
+// ignoram esse tipo de outlier.
+function amostrasAoRedor(dir, espalhamentoRad) {
+  const arbitrario = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const tangenteA = new THREE.Vector3().crossVectors(dir, arbitrario).normalize();
+  const tangenteB = new THREE.Vector3().crossVectors(dir, tangenteA).normalize();
+  const amostras = [dir.clone()];
+  const offsets = [
+    [1, 0], [-1, 0], [0, 1], [0, -1],
+    [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7],
+  ];
+  for (const [a, b] of offsets) {
+    const v = dir.clone()
+      .addScaledVector(tangenteA, a * espalhamentoRad)
+      .addScaledVector(tangenteB, b * espalhamentoRad)
+      .normalize();
+    amostras.push(v);
+  }
+  return amostras;
+}
+
+function posicionarEletrodos() {
+  const raioEstimado = bboxCerebro.max.distanceTo(bboxCerebro.min) / 2;
+  const raycasterLocal = new THREE.Raycaster();
+  raycasterLocal.params.Mesh = raycasterLocal.params.Mesh || {};
+
+  for (const nome of CANAIS_19) {
+    const [th, ph] = POS_10_20[nome];
+    const dir = dirEsfera(th, ph);
+    const reg = loboDe(nome);
+    const cor = CORES_LOBO_HEX[reg];
+
+    // Amostra um pequeno cone ao redor da direção alvo (± ~6°) e usa a
+    // distância MEDIANA entre as amostras válidas — isso joga fora tanto
+    // reentrâncias pontuais (fissura, sulco) quanto eventuais furos no
+    // mesh, e assenta o eletrodo na crista real da região.
+    const distancias = [];
+    for (const d of amostrasAoRedor(dir, 0.10)) {
+      const origemRaio = d.clone().multiplyScalar(raioEstimado * 2.2);
+      raycasterLocal.set(origemRaio, d.clone().negate());
+      raycasterLocal.far = raioEstimado * 3;
+      const hits = malhaCerebro ? raycasterLocal.intersectObject(malhaCerebro) : [];
+      if (hits.length) distancias.push(hits[0].point.length());
+    }
+
+    let pos;
+    if (distancias.length) {
+      distancias.sort((a, b) => a - b);
+      const raioMediano = distancias[Math.floor(distancias.length / 2)];
+      // usa a direção ORIGINAL (não uma das amostras espalhadas) com o
+      // raio mediano — o eletrodo fica exatamente no azimute 10-20 pedido,
+      // só a distância do centro é que vem robusta à reentrância.
+      pos = dir.clone().multiplyScalar(raioMediano);
+    } else {
+      pos = dir.clone().multiplyScalar(raioEstimado);
+    }
+
+    const esfera = new THREE.Mesh(
+      new THREE.SphereGeometry(raioEstimado * 0.028, 18, 14),
+      new THREE.MeshStandardMaterial({ color: cor, emissive: cor, emissiveIntensity: 0.6, roughness: 0.35 })
+    );
+    esfera.position.copy(pos);
+    esfera.userData = { nome, regiao: reg };
+
+    // pequena agulha FIXA (comprimento constante), só pra indicar a
+    // orientação radial do dipolo — sem oscilar de posição.
+    const comprimentoFixo = raioEstimado * 0.09;
+    const fim = pos.clone().add(dir.clone().multiplyScalar(comprimentoFixo));
+    const linha = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([pos, fim]),
+      new THREE.LineBasicMaterial({ color: cor, transparent: true, opacity: 0.75 })
+    );
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(raioEstimado * 0.012, raioEstimado * 0.032, 10),
+      new THREE.MeshBasicMaterial({ color: cor, transparent: true, opacity: 0.9 })
+    );
+    cone.position.copy(fim);
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+
+    const rotulo = textoSprite(nome, 0xeef3fb);
+    rotulo.position.copy(fim.clone().add(dir.clone().multiplyScalar(comprimentoFixo * 0.9)));
+
+    grupoEletrodos.add(esfera, linha, cone, rotulo);
+    eletrodos.push({ nome, regiao: reg, esfera, linha, cone, rotulo, pos, dir, brilho: 1 });
+  }
+}
+
+// Enquadra a câmera pelo tamanho REAL da malha passada — reaproveitada
+// tanto pro brain.obj quanto pra malha fsaverage (bem menor), chamada de
+// novo toda vez que a aba ativa muda, pra sempre começar bem enquadrada
+// na malha que está visível naquele momento.
+function ajustarCameraParaMalha(malha) {
+  if (!malha) return;
+  malha.geometry.computeBoundingBox();
+  const bbox = malha.geometry.boundingBox;
+  const raio = bbox.max.distanceTo(bbox.min) / 2;
+  const centro = new THREE.Vector3();
+  bbox.getCenter(centro);
+  malha.localToWorld(centro);
+  camera.position.set(centro.x + raio * 1.7, centro.y + raio * 1.1, centro.z + raio * 2.6);
+  controls.target.copy(centro);
+  controls.minDistance = raio * 0.6;
+  controls.maxDistance = raio * 6;
+  controls.update();
+}
+
+// =========================================================================
+// 8. HOVER — só ilumina o(s) canal(is) relevantes; NÃO apaga os demais.
+//    Pedido explícito: "quando passo o mouse ele fica mais claro mas os
+//    outros permanecem brilhando ainda". Ou seja, o alvo mínimo de brilho
+//    passou a ser o valor de repouso (1), nunca abaixo disso — só o
+//    eletrodo sob o mouse (e os relevantes na banda) sobem acima disso.
+// =========================================================================
+let eletrodoSobre = null;
+const LIMIAR_RELEVANCIA = 0.45;
+
+function atualizarTooltip(el) {
+  eletrodoSobre = el;
+  canalRealcado = el ? el.nome : null;
+  if (el) {
+    const nomesRegiao = { frontal: "Lobo frontal", central: "Região central", parietal: "Lobo parietal", temporal: "Lobo temporal", occipital: "Lobo occipital" };
+    tooltip.innerHTML = `<b>${el.nome}</b><br>` +
+      `<span class="sub">${nomesRegiao[el.regiao]} · relevância ${(relevancia[el.nome]*100).toFixed(0)}% em ${bandaAtiva}</span>`;
+  }
+}
+
+addEventListener("pointermove", (e) => {
+  const r = cv3.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+  mouse.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  mouse.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  const alvos = eletrodos.map((el) => el.esfera);
+  const hits = raycaster.intersectObjects(alvos);
+  const achado = hits.length ? eletrodos.find((el) => el.esfera === hits[0].object) : null;
+
+  atualizarTooltip(achado);
+
+  if (achado) {
+    tooltip.style.left = (e.clientX + 16) + "px";
+    tooltip.style.top = (e.clientY - 8) + "px";
+    tooltip.classList.add("on");
+    controls.autoRotate = false;
+    document.body.style.cursor = "pointer";
+  } else {
+    tooltip.classList.remove("on");
+    document.body.style.cursor = "";
+    if (rotacaoAtiva) controls.autoRotate = true;
+  }
+});
+
+cvT.addEventListener("mousemove", (e) => {
+  const r = cvT.getBoundingClientRect();
+  const y = e.clientY - r.top;
+  const idx = Math.floor(y / (r.height / CANAIS_19.length));
+  const nome = CANAIS_19[Math.max(0, Math.min(CANAIS_19.length - 1, idx))];
+  atualizarTooltip(eletrodos.find((e2) => e2.nome === nome));
+});
+cvT.addEventListener("mouseleave", () => atualizarTooltip(null));
+
+document.getElementById("banda").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-banda]");
+  if (!btn) return;
+  document.querySelectorAll("#banda button").forEach((b) => b.classList.remove("ativo"));
+  btn.classList.add("ativo");
+  bandaAtiva = btn.dataset.banda;
+});
+
+// =========================================================================
+// 11. ABAS — "Sensores" (existente) / "Fontes corticais" (MNE). Reusa o
+//    MESMO renderer/câmera/cena; só troca o que fica visível e qual
+//    barra de controles aparece embaixo.
+// =========================================================================
+let abaAtiva = "sensores";
+const btnAbaSensores = document.getElementById("aba-sensores");
+const btnAbaFontes = document.getElementById("aba-fontes");
+const controlesFontesEl = document.getElementById("controles-fontes");
+const bandaEl = document.getElementById("banda");
+
+function ativarAba(aba) {
+  abaAtiva = aba;
+  btnAbaSensores.classList.toggle("ativo", aba === "sensores");
+  btnAbaFontes.classList.toggle("ativo", aba === "fontes");
+  bandaEl.style.display = aba === "sensores" ? "flex" : "none";
+  controlesFontesEl.style.display = aba === "fontes" ? "flex" : "none";
+  if (malhaCerebro) malhaCerebro.visible = aba === "sensores";
+  grupoEletrodos.visible = aba === "sensores";
+  if (typeof malhaFontes !== "undefined" && malhaFontes) malhaFontes.visible = aba === "fontes";
+  if (aba === "sensores" && malhaCerebro) ajustarCameraParaMalha(malhaCerebro);
+  if (aba === "fontes" && typeof malhaFontes !== "undefined" && malhaFontes) ajustarCameraParaMalha(malhaFontes);
+  if (typeof atualizarVisibilidadeLegenda === "function") atualizarVisibilidadeLegenda();
+  if (aba === "fontes" && typeof aoAtivarAbaFontes === "function") aoAtivarAbaFontes();
+}
+
+btnAbaSensores.addEventListener("click", () => ativarAba("sensores"));
+btnAbaFontes.addEventListener("click", () => ativarAba("fontes"));
+
+// =========================================================================
+// 12. MALHA FSAVERAGE — carregada sob demanda ao entrar na aba "Fontes
+//    corticais". O Three.js OBJLoader carrega geometria NÃO indexada:
+//    cada canto de face vira sua própria entrada em
+//    geometry.attributes.position, na ordem em que as faces aparecem no
+//    arquivo. fsaverage-cortex-face-indices.json guarda, nessa MESMA
+//    ordem, o índice de vértice original de cada canto — então
+//    indiceValorPorVertice[i] é exatamente o índice em values[] que
+//    colore o vértice carregado i. Casar por coordenada (x,y,z) foi
+//    tentado primeiro e se mostrou frágil: Three.js guarda posições em
+//    Float32Array mas o back-end manda float64, e perto de fronteiras
+//    de arredondamento as duas representações podem arredondar pra
+//    lados diferentes — índice de face evita esse problema.
+// =========================================================================
+let malhaFontes = null;
+let carregandoFontes = false;
+let indiceValorPorVertice = null;
+const fontesStatusEl = document.getElementById("fontes-status");
+
+function carregarMalhaFontes() {
+  if (malhaFontes || carregandoFontes) return;
+  carregandoFontes = true;
+  fontesStatusEl.textContent = "Carregando malha fsaverage…";
+
+  Promise.all([
+    fetch("assets/fsaverage-cortex-face-indices.json").then((r) => {
+      if (!r.ok) throw new Error("fsaverage-cortex-face-indices.json não encontrado");
+      return r.json();
+    }),
+    new Promise((resolve, reject) => {
+      new THREE.OBJLoader().load("assets/fsaverage-cortex.obj", resolve, undefined, reject);
+    }),
+  ])
+    .then(([indicesPorCanto, obj]) => {
+      let malha = null;
+      obj.traverse((child) => { if (child.isMesh) malha = child; });
+      if (!malha) throw new Error("Nenhum mesh encontrado em fsaverage-cortex.obj.");
+
+      const geo = malha.geometry.index ? malha.geometry.toNonIndexed() : malha.geometry;
+      const nVerts = geo.attributes.position.count;
+      const cores = new Float32Array(nVerts * 3);
+      for (let i = 0; i < nVerts * 3; i++) cores[i] = 0.35;
+      geo.setAttribute("color", new THREE.BufferAttribute(cores, 3));
+      geo.computeVertexNormals();
+
+      if (indicesPorCanto.length !== nVerts) {
+        console.warn(
+          `fsaverage-cortex-face-indices.json tem ${indicesPorCanto.length} entradas, ` +
+          `a malha carregada tem ${nVerts} vértices — verifique se os dois arquivos vêm da mesma exportação.`
+        );
+      }
+      indiceValorPorVertice = Int32Array.from(indicesPorCanto);
+
+      const mat = new THREE.MeshStandardMaterial({
+        vertexColors: true, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide,
+      });
+      malhaFontes = new THREE.Mesh(geo, mat);
+      malhaFontes.userData.cores = cores;
+      malhaFontes.visible = abaAtiva === "fontes";
+      scene.add(malhaFontes);
+      if (abaAtiva === "fontes") ajustarCameraParaMalha(malhaFontes);
+      fontesStatusEl.textContent = "";
+      carregandoFontes = false;
+    })
+    .catch((err) => {
+      fontesStatusEl.textContent =
+        "Não consegui carregar a malha fsaverage. Rode export_fsaverage_mesh.py dentro de backend/ primeiro.";
+      carregandoFontes = false;
+      console.error(err);
+    });
+}
+
+// =========================================================================
+// 13. SUJEITO + JANELA DE TEMPO — populado a partir de GET /subjects.
+// =========================================================================
+let sujeitosCarregados = false;
+const selectSujeito = document.getElementById("fontes-sujeito");
+const sliderTempo = document.getElementById("fontes-tempo");
+const labelTempo = document.getElementById("fontes-tempo-label");
+
+function ajustarSliderParaSujeito(duracaoS) {
+  const max = Math.max(0, duracaoS - 2); // janela fixa de 2s, não deixa passar do fim gravado
+  sliderTempo.max = max.toFixed(1);
+  sliderTempo.value = "0";
+  labelTempo.textContent = "0.0s";
+}
+
+function carregarSujeitos() {
+  if (sujeitosCarregados) return;
+  sujeitosCarregados = true;
+  fetch(`${BACKEND_URL}/subjects`)
+    .then((r) => { if (!r.ok) throw new Error("status " + r.status); return r.json(); })
+    .then((sujeitos) => {
+      selectSujeito.innerHTML = "";
+      for (const s of sujeitos) {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = `${s.id} (${s.classe}, ${s.duracao_s.toFixed(1)}s)`;
+        opt.dataset.duracao = s.duracao_s;
+        selectSujeito.appendChild(opt);
+      }
+      if (sujeitos.length) ajustarSliderParaSujeito(sujeitos[0].duracao_s);
+    })
+    .catch((err) => {
+      sujeitosCarregados = false; // permite tentar de novo ao reentrar na aba
+      fontesStatusEl.textContent =
+        `Backend Python não respondeu em ${BACKEND_URL}. Rode "uvicorn app:app --reload" dentro de backend/.`;
+      console.error(err);
+    });
+}
+
+selectSujeito.addEventListener("change", () => {
+  const opt = selectSujeito.selectedOptions[0];
+  if (opt) ajustarSliderParaSujeito(parseFloat(opt.dataset.duracao));
+});
+sliderTempo.addEventListener("input", () => {
+  labelTempo.textContent = parseFloat(sliderTempo.value).toFixed(1) + "s";
+});
+
+function aoAtivarAbaFontes() {
+  carregarMalhaFontes();
+  carregarSujeitos();
+}
+
+// =========================================================================
+// 14. RODAR RECONSTRUÇÃO — POST /source-localization, colore malhaFontes
+//    pelos valores devolvidos (normalizados pelo min/max da própria
+//    resposta — escala dSPM não é 0..1 como a amplitude sintética).
+// =========================================================================
+function corPorValorFontes(v, minV, maxV) {
+  const t = maxV > minV ? (v - minV) / (maxV - minV) : 0;
+  return corPorAmplitude(Math.max(0, Math.min(1, t)));
+}
+
+const legendaFontesEl = document.getElementById("legenda-fontes");
+let reconstrucaoJaRodou = false;
+function atualizarVisibilidadeLegenda() {
+  legendaFontesEl.style.display = (abaAtiva === "fontes" && reconstrucaoJaRodou) ? "flex" : "none";
+}
+
+document.getElementById("fontes-rodar").addEventListener("click", () => {
+  if (!malhaFontes || !indiceValorPorVertice) {
+    fontesStatusEl.textContent = "Malha ainda carregando, espera um instante.";
+    return;
+  }
+  const sujeito = selectSujeito.value;
+  if (!sujeito) {
+    fontesStatusEl.textContent = "Nenhum sujeito selecionado.";
+    return;
+  }
+  const tStart = parseFloat(sliderTempo.value);
+  const tEnd = tStart + 2;
+
+  fontesStatusEl.textContent = "Rodando reconstrução (MNE)…";
+  fetch(`${BACKEND_URL}/source-localization`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subject_id: sujeito, t_start: tStart, t_end: tEnd, method: "dSPM" }),
+  })
+    .then(async (r) => {
+      if (!r.ok) {
+        const corpo = await r.json().catch(() => ({}));
+        throw new Error(corpo.detail || ("status " + r.status));
+      }
+      return r.json();
+    })
+    .then((resp) => {
+      const valores = resp.values;
+      let minV = Infinity, maxV = -Infinity;
+      for (const v of valores) { if (v < minV) minV = v; if (v > maxV) maxV = v; }
+
+      const cores = malhaFontes.userData.cores;
+      for (let i = 0; i < indiceValorPorVertice.length; i++) {
+        const v = valores[indiceValorPorVertice[i]];
+        const [r2, g2, b2] = corPorValorFontes(v, minV, maxV);
+        cores[i * 3] = r2; cores[i * 3 + 1] = g2; cores[i * 3 + 2] = b2;
+      }
+      malhaFontes.geometry.attributes.color.needsUpdate = true;
+      reconstrucaoJaRodou = true;
+      atualizarVisibilidadeLegenda();
+
+      fontesStatusEl.innerHTML =
+        `<b>${sujeito}</b> · ${tStart.toFixed(1)}–${tEnd.toFixed(1)}s · ${resp.method}<br>` +
+        `<span style="color:#7f8ba1">19 canais é pouco pra localizar fontes com precisão — isso é ` +
+        `uma estimativa aproximada, não a origem exata do sinal. fsaverage é um cérebro template, ` +
+        `não a anatomia real do sujeito.</span>`;
+    })
+    .catch((err) => {
+      fontesStatusEl.textContent = "Erro na reconstrução: " + err.message;
+      console.error(err);
+    });
+});
+
+const referenciaTextoEl = document.getElementById("referencia-texto");
+function atualizarTextoReferencia() {
+  referenciaTextoEl.textContent = TEXTOS_REFERENCIA[referenciaAtiva];
+}
+document.getElementById("referencia").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-ref]");
+  if (!btn) return;
+  document.querySelectorAll("#referencia button").forEach((b) => b.classList.remove("ativo"));
+  btn.classList.add("ativo");
+  referenciaAtiva = btn.dataset.ref;
+  atualizarTextoReferencia();
+});
+atualizarTextoReferencia();
+
+// =========================================================================
+// 14b. VELOCIDADE — multiplicador sobre a velocidade "normal" (1.0x =
+//    comportamento padrão de sempre). Só a janela principal roda
+//    passoSinal de verdade; a janela "só sinais" também mostra o slider
+//    (pra poder ajustar direto de lá, analisando), mas quando mexido ali
+//    ele manda um comando pela BroadcastChannel pedindo pra principal
+//    mudar de verdade — e a principal devolve o valor aplicado, deixando
+//    os dois sliders sempre sincronizados nos dois sentidos.
+// =========================================================================
+let velocidadeSinal = 1.0;
+const velocidadeSliderEl = document.getElementById("velocidade-slider");
+const velocidadeValorEl = document.getElementById("velocidade-valor");
+
+function aplicarVelocidadeUI(v) {
+  velocidadeValorEl.textContent = v.toFixed(1) + "x";
+  if (parseFloat(velocidadeSliderEl.value) !== v) velocidadeSliderEl.value = v;
+}
+
+if (velocidadeSliderEl) {
+  velocidadeSliderEl.addEventListener("input", () => {
+    const v = parseFloat(velocidadeSliderEl.value);
+    aplicarVelocidadeUI(v);
+    if (somenteSinais) {
+      if (canalSinais) canalSinais.postMessage({ tipo: "definir-velocidade", valor: v });
+    } else {
+      velocidadeSinal = v;
+      if (canalSinais) canalSinais.postMessage({ tipo: "velocidade", valor: v });
+    }
+  });
+}
+
+// =========================================================================
+// 15. DADO REAL (adhdata.csv) NOS TRAÇADOS — usa window.setEEGData, o
+//    mesmo hook que já existia pra plugar fonte externa. Busca a
+//    gravação inteira do sujeito escolhido uma vez (GET /raw-data), e
+//    cada amostra pedida vira um índice nesse array. Como passa pelo
+//    MESMO passoSinal/referência/filtro de sempre, funciona nas duas
+//    janelas (a "só sinais" só não mostra o controle — ela nunca gera
+//    amostra por conta própria, só recebe pelo BroadcastChannel).
+// =========================================================================
+let sujeitosDadoRealCarregados = false;
+const selectDadoRealSujeito = document.getElementById("dado-real-sujeito");
+const btnDadoRealTocar = document.getElementById("dado-real-tocar");
+const dadoRealStatusEl = document.getElementById("dado-real-status");
+let tocandoDadoReal = false;
+
+function carregarSujeitosDadoReal() {
+  if (sujeitosDadoRealCarregados) return;
+  sujeitosDadoRealCarregados = true;
+  fetch(`${BACKEND_URL}/subjects`)
+    .then((r) => { if (!r.ok) throw new Error("status " + r.status); return r.json(); })
+    .then((sujeitos) => {
+      selectDadoRealSujeito.innerHTML = "";
+      for (const s of sujeitos) {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = `${s.id} (${s.classe}, ${s.duracao_s.toFixed(1)}s)`;
+        selectDadoRealSujeito.appendChild(opt);
+      }
+    })
+    .catch((err) => {
+      sujeitosDadoRealCarregados = false;
+      dadoRealStatusEl.textContent = `Backend Python não respondeu em ${BACKEND_URL}.`;
+      console.error(err);
+    });
+}
+if (!somenteSinais) carregarSujeitosDadoReal();
+
+if (btnDadoRealTocar) {
+  btnDadoRealTocar.addEventListener("click", () => {
+    if (tocandoDadoReal) {
+      window.clearEEGData();
+      tocandoDadoReal = false;
+      btnDadoRealTocar.textContent = "Tocar dado real";
+      btnDadoRealTocar.classList.remove("ativo");
+      dadoRealStatusEl.textContent = "";
+      return;
+    }
+
+    const sujeito = selectDadoRealSujeito.value;
+    if (!sujeito) { dadoRealStatusEl.textContent = "Nenhum sujeito disponível."; return; }
+
+    dadoRealStatusEl.textContent = `Carregando gravação de ${sujeito}…`;
+    fetch(`${BACKEND_URL}/raw-data?subject_id=${encodeURIComponent(sujeito)}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const corpo = await r.json().catch(() => ({}));
+          throw new Error(corpo.detail || ("status " + r.status));
+        }
+        return r.json();
+      })
+      .then((dados) => {
+        const fsReal = dados.fs;
+        const inicioReal = tGlobal;
+        window.setEEGData((canal, t) => {
+          const arr = dados.channels[canal];
+          if (!arr || !arr.length) return 0;
+          let idx = Math.floor((t - inicioReal) * fsReal) % arr.length;
+          if (idx < 0) idx += arr.length;
+          return arr[idx];
+        });
+        tocandoDadoReal = true;
+        btnDadoRealTocar.textContent = "Parar dado real";
+        btnDadoRealTocar.classList.add("ativo");
+        dadoRealStatusEl.textContent = `Tocando ${sujeito} (dado real, ${fsReal}Hz) — repete ao chegar no fim.`;
+      })
+      .catch((err) => {
+        dadoRealStatusEl.textContent = "Erro ao carregar dado real: " + err.message;
+        console.error(err);
+      });
+  });
+}
+
+let rotacaoAtiva = true;
+document.getElementById("btn-rotacao").addEventListener("click", (e) => {
+  rotacaoAtiva = !rotacaoAtiva;
+  controls.autoRotate = rotacaoAtiva;
+  e.target.classList.toggle("ativo", rotacaoAtiva);
+});
+document.getElementById("btn-pausa").addEventListener("click", () => {
+  const novoPausado = !pausado;
+  // despausar sempre limpa o instante travado — não fica preso sem querer
+  const novoTempo = novoPausado ? tempoSelecionado : null;
+  aplicarTempoPausado(novoTempo, novoPausado);
+  if (canalSinais) canalSinais.postMessage({ tipo: "tempo-pausado", tempo: novoTempo, pausado: novoPausado });
+});
+
+addEventListener("resize", medir3D);
+
+// =========================================================================
+// 9. LOOP — só o SINAL anima (cor do mesh por vértice + brilho/escala dos
+//    eletrodos). Nenhuma posição de eletrodo ou vértice se desloca.
+// =========================================================================
+let ultimoT = performance.now();
+const pesosVertice = []; // cache: por vértice, pesos IDW em relação aos 19 eletrodos
+
+function calcularPesosVertice() {
+  if (!posicoesVertices || !eletrodos.length) return;
+  pesosVertice.length = 0;
+  const nVerts = posicoesVertices.length / 3;
+  for (let i = 0; i < nVerts; i++) {
+    const vx = posicoesVertices[i * 3], vy = posicoesVertices[i * 3 + 1], vz = posicoesVertices[i * 3 + 2];
+    const pesos = new Float32Array(eletrodos.length);
+    let soma = 0;
+    for (let k = 0; k < eletrodos.length; k++) {
+      const p = eletrodos[k].pos;
+      const dx = vx - p.x, dy = vy - p.y, dz = vz - p.z;
+      const d2 = dx*dx + dy*dy + dz*dz;
+      const w = 1 / (d2 * Math.sqrt(d2) + 1e-6); // 1/d^3
+      pesos[k] = w; soma += w;
+    }
+    pesosVertice.push({ pesos, soma });
+  }
+}
+
+function corPorAmplitude(a) {
+  const paradas = [
+    [0.00, [29, 78, 216]], [0.25, [14, 165, 165]], [0.50, [34, 197, 94]],
+    [0.75, [234, 179, 8]], [1.00, [239, 68, 68]],
+  ];
+  for (let i = 0; i < paradas.length - 1; i++) {
+    const [t0, c0] = paradas[i], [t1, c1] = paradas[i + 1];
+    if (a >= t0 && a <= t1) {
+      const f = (a - t0) / (t1 - t0);
+      return [c0[0]+(c1[0]-c0[0])*f, c0[1]+(c1[1]-c0[1])*f, c0[2]+(c1[2]-c0[2])*f].map(v => v/255);
+    }
+  }
+  return [239/255, 68/255, 68/255];
+}
+
+let jaCalculouPesos = false;
+
+// Pico adaptativo — normaliza o brilho/cor da aba Sensores (3D) em vez de
+// uma constante fixa (/4) tunada só pro sinal sintético. Sobe na hora
+// quando aparece uma amostra maior, decai devagar — funciona tanto com o
+// sintético (~1-5) quanto com dado real do CSV (~100-500). É um único
+// valor GLOBAL (não por canal): a comparação relativa entre canais é o
+// ponto da visualização (qual região está mais ativa que as outras).
+let picoAdaptativo = 1;
+
+// Acumulador fracionário de passos de simulação — é isto que faz a
+// velocidade ter efeito visível de verdade: multiplicar só o dt (tentativa
+// anterior) acelerava o "relógio" interno, mas o buffer sempre recebia
+// exatamente 1 amostra por frame (~60/s reais), então a ROLAGEM na tela
+// nunca mudava de ritmo. Agora velocidadeSinal controla quantos passos de
+// passoSinal rodam por frame: 2.0x roda 2 passos/frame (rolagem 2x mais
+// rápida), 0.2x roda 1 passo a cada ~5 frames (rolagem 5x mais lenta).
+let passosPendentes = 0;
+
+function animar() {
+  requestAnimationFrame(animar);
+  const agora = performance.now();
+  const dt = Math.min(0.05, (agora - ultimoT) / 1000);
+  ultimoT = agora;
+
+  if (!somenteSinais) {
+    passosPendentes += velocidadeSinal;
+    while (passosPendentes >= 1) {
+      passoSinal(dt * 3.2);
+      passosPendentes -= 1;
+    }
+  }
+  if (somenteSinais) {
+    if (modoJanelaSinais === "analise") atualizarAnaliseTDAH();
+    else desenharTracosClinico();
+  } else if (modoTracos === "zoom") desenharTracosZoom();
+  else desenharTracos();
+
+  if (somenteSinais) return; // janela "só sinais": nada de cena 3D daqui pra baixo
+
+  controls.update();
+
+  if (malhaCerebro && !jaCalculouPesos) { calcularPesosVertice(); jaCalculouPesos = true; }
+
+  // se um instante está travado (clicou no traçado clínico), acha o
+  // índice correspondente 1x aqui — todo o resto do frame (pico
+  // adaptativo, eletrodo, malha) reusa, em vez de recalcular por canal
+  indiceTempoSelecionadoCache = tempoSelecionado !== null ? indiceMaisProximoDoTempo(tempoSelecionado) : null;
+
+  for (const c of CANAIS_19) picoAdaptativo = Math.max(picoAdaptativo * 0.998, Math.abs(valorParaVisualizacao(c)) + 1e-6);
+
+  // -----------------------------------------------------------------------
+  // brilho por eletrodo: repouso = 1 sempre. Hover só ADICIONA brilho ao(s)
+  // relevante(s) e ao eletrodo sob o mouse — nunca subtrai dos outros.
+  // -----------------------------------------------------------------------
+  for (const el of eletrodos) {
+    let alvo = 1; // piso: todos continuam brilhando em repouso
+    if (eletrodoSobre) {
+      if (el === eletrodoSobre) alvo = 1.9;
+      else if (relevancia[el.nome] >= LIMIAR_RELEVANCIA) alvo = 1.4;
+      // os irrelevantes ficam no piso (1), não escurecem
+    }
+    el.brilho += (alvo - el.brilho) * 0.15;
+  }
+
+  // cor/emissão/escala do eletrodo a partir da amostra atual (ou travada) + brilho
+  for (const el of eletrodos) {
+    const v = valorParaVisualizacao(el.nome);
+    const ampCru = Math.max(0, Math.min(1, Math.abs(v) / picoAdaptativo));
+    el.esfera.material.emissiveIntensity = 0.45 + ampCru * 0.9 + (el.brilho - 1) * 0.9;
+    el.esfera.scale.setScalar(1 + ampCru * 0.25 + (el.brilho - 1) * 0.5);
+    el.linha.material.opacity = 0.5 + ampCru * 0.35;
+    el.cone.material.opacity = 0.55 + ampCru * 0.35;
+    el.rotulo.material.opacity = Math.min(1, 0.55 + (el.brilho - 1) * 0.6 + ampCru * 0.2);
+  }
+
+  // vertex color do cérebro: IDW ponderado pela amostra atual (ou travada)
+  // de cada eletrodo (não pela posição — as posições nunca mudam)
+  if (malhaCerebro && pesosVertice.length) {
+    const amostraPorEletrodo = eletrodos.map((el) => Math.max(0, Math.min(1, Math.abs(valorParaVisualizacao(el.nome)) / picoAdaptativo)));
+    for (let i = 0; i < pesosVertice.length; i++) {
+      const { pesos, soma } = pesosVertice[i];
+      let acc = 0;
+      for (let k = 0; k < pesos.length; k++) acc += pesos[k] * amostraPorEletrodo[k];
+      const val = soma > 0 ? acc / soma : 0;
+      const [r, g, b] = corPorAmplitude(val);
+      coresVertices[i*3] = r; coresVertices[i*3+1] = g; coresVertices[i*3+2] = b;
+    }
+    malhaCerebro.geometry.attributes.color.needsUpdate = true;
+  }
+
+  const ativos = CANAIS_19.filter((c) => relevancia[c] >= LIMIAR_RELEVANCIA);
+  statusEl.innerHTML =
+    `<b>${ativos.length}/19</b> canais acima de ${Math.round(LIMIAR_RELEVANCIA*100)}% da potência máxima em ${bandaAtiva}` +
+    (eletrodoSobre ? `<br>sobre: <b>${eletrodoSobre.nome}</b>` : "");
+
+  renderer.render(scene, camera);
+}
+
+medir3D();
+animar();
+
+// =========================================================================
+// 10. HOOK PARA DADOS REAIS
+//
+//    window.setEEGData((nomeCanal, tempoSegundos) => valorEmMicrovolts)
+//
+//    Nomes esperados: exatamente os 19 de CANAIS_19 (Fp1,Fp2,F3,F4,C3,
+//    C4,P3,P4,O1,O2,F7,F8,T7,T8,P7,P8,Fz,Cz,Pz — mesma grafia das
+//    colunas de adhdata.csv).
+//    window.clearEEGData() volta ao sinal sintético.
+// =========================================================================
+window.setEEGData = function (fn) { fonteExterna = fn; };
+window.clearEEGData = function () { fonteExterna = null; };
+</script>
+</body>
+</html>
