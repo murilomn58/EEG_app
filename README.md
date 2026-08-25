@@ -226,7 +226,7 @@ python -m uvicorn app:app --port 8000
 First startup takes a few minutes: it downloads the fsaverage template and builds the forward and inverse operators. Subsequent runs are fast — everything is cached. Wait for:
 
 ```
-[startup] forward/inverse ready: 20484 vertices, 19 channels
+[startup] forward/inverse prontos: 20484 vértices, 19 canais
 ```
 
 ### 3. Serve the frontend
