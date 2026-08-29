@@ -1,21 +1,59 @@
-MIT License
+Copyright (c) 2026 Murilo Miguel Narciso
+Todos os direitos reservados. / All rights reserved.
 
-Copyright (c) 2026 Murilo
+================================================================
+PORTUGUES
+================================================================
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Este software e a documentacao que o acompanha sao obra intelectual de
+Murilo Miguel Narciso e estao protegidos pela Lei 9.610/1998 (Direitos
+Autorais) e pela Lei 9.609/1998 (Protecao da Propriedade Intelectual de
+Programa de Computador).
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+NENHUMA licenca de uso, copia, modificacao, distribuicao, sublicenciamento
+ou comercializacao e concedida, expressa ou tacitamente, pelo simples
+acesso a este repositorio ou ao seu conteudo.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Qualquer uso depende de AUTORIZACAO PREVIA E ESCRITA do autor, em
+instrumento proprio que defina escopo, prazo e contrapartida.
+
+Parte deste trabalho e desenvolvida no ambito do Programa de Pos-Graduacao
+em Engenharia Eletronica e Computacao do Instituto Tecnologico de
+Aeronautica (ITA). Direitos eventualmente titularizados pela instituicao
+ou por coautores, na forma da Lei 10.973/2004, ficam integralmente
+ressalvados e nao sao afetados por este aviso.
+
+================================================================
+ENGLISH
+================================================================
+
+This software and its accompanying documentation are the intellectual work
+of Murilo Miguel Narciso, protected under Brazilian Law 9.610/1998
+(Copyright) and Law 9.609/1998 (Software Protection).
+
+NO license to use, copy, modify, distribute, sublicense or commercialize is
+granted, expressly or implicitly, by mere access to this repository or its
+contents.
+
+Any use requires PRIOR WRITTEN AUTHORIZATION from the author, through a
+specific instrument defining scope, term and consideration.
+
+Part of this work is developed within the graduate program in Electronic
+Engineering and Computer Science at Instituto Tecnologico de Aeronautica
+(ITA), Brazil. Any rights held by the institution or by co-authors under
+Brazilian Law 10.973/2004 are fully reserved and unaffected by this notice.
+
+================================================================
+HISTORICO DE LICENCIAMENTO / LICENSING HISTORY
+================================================================
+
+Ate 2026-08-28 este repositorio continha um aviso de licenca MIT, incluido
+por engano na configuracao inicial do projeto. O repositorio permaneceu
+PRIVADO durante todo esse periodo e nenhuma copia foi distribuida a
+terceiros sob aquele aviso. A presente licenca proprietaria substitui
+integralmente o aviso anterior.
+
+Until 2026-08-28 this repository carried an MIT license notice, included by
+mistake in the initial project setup. The repository remained PRIVATE
+throughout that period and no copy was distributed to any third party under
+that notice. This proprietary license fully supersedes the previous one.

@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Mapa do mestrado — três trilhas</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23050806'/%3E%3Cpath d='M3 22 L11 22 L11 10 L21 10 L21 22 L29 22' fill='none' stroke='%234dffa6' stroke-width='2.6' stroke-linejoin='round'/%3E%3C/svg%3E">
+<!--
+  O QUE ESTA PÁGINA É
+
+  Um fluxograma de três faixas horizontais: uma por trilha do mestrado
+  (Dissertação, App EEG, Transformer). O eixo horizontal é ORDEM DE
+  DEPENDÊNCIA, não data: a coluna de uma tarefa é o caminho mais longo até
+  ela no grafo, então tudo que está à esquerda precisa acontecer antes.
+
+  Acima das faixas, a espinha: os 13 blocos do currículo em 4 fases. Cada
+  bloco desce um fio pontilhado para cada trilha que ele toca, e esse é o
+  único lugar onde as ligações entre trilhas são DERIVADAS de dado real —
+  o campo `**Trilha:**` do Curriculo.md é multivalorado em 7 dos 13 blocos.
+
+  Abaixo de uma tarefa feita, pendurado, o arquivo que ela construiu, com o
+  estado real em disco.
+
+  A versão anterior desta página desenhava o progresso como um registro de
+  EEG e enchia a tela de prosa. Ficava bonito e não respondia "o que
+  destrava o quê", que é a pergunta que se faz olhando de longe. Aqui não
+  há parágrafo nenhum: o detalhe vive no painel lateral, ao clicar num nó.
+
+  ARQUITETURA DE RENDER: nós são divs posicionados em absoluto, arestas são
+  um único SVG sobreposto, e zoom/pan é um transform no contêiner dos dois.
+  Zero dependência: nada de CDN, nada de d3. O layout é CALCULADO aqui, não
+  escrito à mão, então o espaçamento se ajusta sozinho ao número de tarefas.
+-->
+<style>
+  :root{
+    --fundo:#050806; --grade:#0d1a10;
+    --fosforo:#4dffa6; --fosforo-meio:#2aa870; --fosforo-off:#1b4d35;
+    --ambar:#ffb340; --tinta:#c8ffe0; --tinta-fraca:#5f8f75;
+    --caixa:#0a1410; --caixa2:#0d1b15;
+    --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:var(--fundo);
+    color:var(--tinta);font-family:'Segoe UI',system-ui,-apple-system,sans-serif}
+
+  /* ---------- cabeçalho: UMA linha ---------- */
+  header{position:fixed;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;
+    gap:14px;padding:9px 18px;background:rgba(5,8,6,0.93);border-bottom:1px solid #12261c;
+    font-size:11.5px;backdrop-filter:blur(6px);flex-wrap:wrap}
+  header b{color:var(--fosforo);font-variant-numeric:tabular-nums}
+  header .sep{color:#1b4d35}
+  header .fim{margin-left:auto;color:var(--tinta-fraca);font-family:var(--mono);font-size:10px}
+
+  /* ---------- palco ---------- */
+  #palco{position:absolute;inset:0;top:36px;bottom:26px;overflow:hidden;cursor:grab;
+    background-color:var(--fundo);
+    background-image:radial-gradient(var(--grade) 1.2px, transparent 1.3px);
+    background-size:24px 24px}
+  #palco.arrastando{cursor:grabbing}
+  #mapa{position:absolute;top:0;left:0;transform-origin:0 0;will-change:transform}
+  #fios{position:absolute;top:0;left:0;overflow:visible;pointer-events:none}
+
+  /* ---------- faixas ---------- */
+  .faixa-fundo{position:absolute;left:0;border-top:1px solid #10261b;border-bottom:1px solid #10261b;
+    background:linear-gradient(180deg,rgba(77,255,166,0.018),transparent)}
+  .faixa-nome{position:absolute;font-family:var(--mono);font-size:11px;font-weight:700;
+    letter-spacing:0.14em;text-transform:uppercase;color:var(--fosforo-meio);white-space:nowrap}
+  .faixa-conta{position:absolute;font-family:var(--mono);font-size:9.5px;color:var(--tinta-fraca);white-space:nowrap}
+
+  /* ---------- nós ---------- */
+  .no{position:absolute;cursor:pointer;transition:transform .12s}
+  .no .cx{width:100%;height:100%;border-radius:8px;padding:7px 9px;overflow:hidden;
+    background:linear-gradient(180deg,var(--caixa2),var(--caixa));
+    border:1px solid color-mix(in srgb, var(--a) 30%, #14261d);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,0.025);position:relative}
+  .no .cx::after{content:"";position:absolute;left:9px;right:9px;top:-1px;height:2px;border-radius:2px;
+    background:var(--a);opacity:.85}
+  .no.feita .cx{box-shadow:inset 0 1px 0 rgba(255,255,255,0.03), 0 0 16px -6px var(--a)}
+  .no.aberta .cx{background:rgba(10,20,16,0.55);border-style:dashed}
+  .no:hover{transform:translateY(-2px)}
+  .no:hover .cx{border-color:color-mix(in srgb, var(--a) 65%, transparent)}
+  .no.sel .cx{border-color:var(--a);box-shadow:0 0 0 2px color-mix(in srgb, var(--a) 45%, transparent)}
+  /* Duas linhas e para. O selo e o XP moram no rodape da caixa, e sem o
+     teto de altura o terceiro renglon do rotulo passava por cima deles. */
+  .no .t{font-size:11px;line-height:1.28;color:var(--tinta);display:-webkit-box;
+    -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    max-height:29px;padding-right:2px}
+  .no.aberta .t{color:var(--tinta-fraca)}
+  .no .meta{position:absolute;right:8px;bottom:5px;font-family:var(--mono);font-size:8.5px;
+    color:var(--tinta-fraca);letter-spacing:.03em}
+  .no .selo{position:absolute;left:8px;bottom:5px;font-family:var(--mono);font-size:8.5px;
+    color:var(--a);letter-spacing:.05em;text-transform:uppercase}
+
+  /* artefato: o arquivo que a tarefa construiu */
+  .no.artefato .cx{border-radius:6px;padding:4px 8px;border-style:solid}
+  .no.artefato .t{font-family:var(--mono);font-size:9.5px;-webkit-line-clamp:1;word-break:break-all;
+    color:var(--a)}
+  .no.artefato .cx::after{display:none}
+
+  /* portão: bloqueador que não é tarefa */
+  .no.portao .cx{border-radius:0;border-width:1px;border-style:solid;
+    background:linear-gradient(180deg,rgba(255,179,64,0.10),rgba(255,179,64,0.03));
+    clip-path:polygon(14px 0, 100% 0, calc(100% - 14px) 100%, 0 100%)}
+  .no.portao .cx::after{display:none}
+  .no.portao .t{font-size:10px;font-weight:600;color:var(--ambar);padding:0 6px}
+
+  /* ---------- espinha do currículo ---------- */
+  .fase{position:absolute;font-family:var(--mono);font-size:9.5px;font-weight:700;
+    letter-spacing:.16em;text-transform:uppercase;color:var(--fosforo-meio);white-space:nowrap}
+  .fase-faixa{position:absolute;border-left:1px solid #12281d}
+  .bloco{position:absolute;cursor:pointer;border-radius:5px;display:flex;align-items:center;
+    justify-content:center;font-family:var(--mono);font-size:10px;font-weight:700;
+    border:1px solid var(--fosforo-off);color:var(--fosforo-off);background:var(--caixa);
+    transition:all .12s}
+  .bloco.feito{border-color:var(--fosforo);color:#052014;background:var(--fosforo);
+    box-shadow:0 0 14px -4px var(--fosforo)}
+  .bloco:hover{transform:translateY(-1px);border-color:var(--fosforo)}
+  .bloco-rot{position:absolute;font-size:9px;color:var(--tinta-fraca);white-space:nowrap;
+    transform-origin:0 0;pointer-events:none}
+
+  /* ---------- painel lateral ---------- */
+  #lente{position:fixed;top:0;right:0;height:100%;width:360px;z-index:40;overflow-y:auto;
+    background:rgba(5,10,7,0.975);border-left:1px solid #163023;padding:20px 20px 40px;
+    transform:translateX(100%);transition:transform .2s cubic-bezier(.2,.7,.2,1);
+    backdrop-filter:blur(8px)}
+  #lente.aberta{transform:translateX(0)}
+  body.lente-aberta footer{right:360px}
+  #lente h2{margin:0 0 3px;font-size:15px;line-height:1.35;color:var(--tinta);font-weight:600;
+    padding-right:24px}
+  #lente .sub{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--a,#4dffa6);margin-bottom:14px}
+  #lente h3{margin:16px 0 5px;font-family:var(--mono);font-size:9px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--tinta-fraca);font-weight:700}
+  #lente p{margin:0;font-size:12px;line-height:1.55;color:var(--tinta-fraca)}
+  #lente .cita{font-family:var(--mono);font-size:10px;line-height:1.5;color:var(--fosforo-meio);
+    background:rgba(77,255,166,0.05);border-left:2px solid var(--fosforo-off);
+    padding:6px 9px;margin-top:5px;word-break:break-word}
+  #lente .lig{display:block;font-size:11.5px;line-height:1.45;color:var(--tinta);
+    padding:6px 0;border-bottom:1px solid rgba(77,255,166,0.08);cursor:pointer}
+  #lente .lig:hover{color:var(--fosforo)}
+  #lente .lig small{display:block;font-family:var(--mono);font-size:9px;color:var(--tinta-fraca);
+    margin-top:2px;line-height:1.4}
+  #lente .alerta{border-left-color:var(--ambar);background:rgba(255,179,64,0.07);color:var(--ambar)}
+  #fechar-lente{position:absolute;top:14px;right:16px;cursor:pointer;color:var(--tinta-fraca);
+    font-size:18px;line-height:1;background:none;border:0;font-family:inherit}
+  #fechar-lente:hover{color:var(--tinta)}
+
+  /* ---------- rodapé: legenda numa linha ---------- */
+  /* z-index acima da lente, e o rodape encolhe quando ela abre. A lente
+     tem 360px e cobria justamente o canto direito, onde moram os botoes de
+     zoom: eles ficavam vivos no DOM e mortos ao clique. */
+  footer{position:fixed;bottom:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:14px;
+    transition:right .2s cubic-bezier(.2,.7,.2,1);
+    padding:5px 18px;background:rgba(5,8,6,0.93);border-top:1px solid #12261c;
+    font-family:var(--mono);font-size:9.5px;color:var(--tinta-fraca);flex-wrap:wrap}
+  footer i{width:9px;height:9px;border-radius:2px;display:inline-block;margin-right:5px;vertical-align:-1px}
+  footer .zoom{margin-left:auto;display:flex;gap:5px;align-items:center}
+  footer button{font-family:var(--mono);font-size:10px;background:rgba(77,255,166,0.06);
+    border:1px solid #163023;color:var(--tinta-fraca);border-radius:4px;padding:2px 8px;cursor:pointer}
+  footer button:hover{color:var(--fosforo);border-color:var(--fosforo-off)}
+  #vazio{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    padding:40px;text-align:center;font-size:12.5px;line-height:1.6;color:var(--tinta-fraca)}
+</style>
+</head>
+<body>
+
+<header>
+  <span>nível <b id="h-nivel">—</b></span><span class="sep">·</span>
+  <span><b id="h-xp">—</b> XP</span><span class="sep">·</span>
+  <span>streak <b id="h-streak">—</b></span><span class="sep">·</span>
+  <span><b id="h-tarefas">—</b> tarefas</span><span class="sep">·</span>
+  <span>bloco <b id="h-bloco">—</b> do currículo</span>
+  <span class="fim" id="h-quando">—</span>
+</header>
+
+<div id="palco">
+  <div id="mapa">
+    <svg id="fios"></svg>
+  </div>
+</div>
+
+<aside id="lente">
+  <button id="fechar-lente" title="fechar">&times;</button>
+  <div id="lente-corpo"></div>
+</aside>
+
+<footer>
+  <span><i style="background:#4dffa6"></i>feita</span>
+  <span><i style="background:transparent;border:1px dashed #1b4d35"></i>aberta</span>
+  <span><i style="background:#ffb340"></i>bloqueada / portão</span>
+  <span><i style="background:#2aa870"></i>arquivo construído</span>
+  <span class="sep">·</span>
+  <span>eixo horizontal = ordem de dependência, não data</span>
+  <span class="zoom">
+    <button id="btn-ajustar">ajustar</button>
+    <button id="btn-menos">&minus;</button><span id="pct">100%</span><button id="btn-mais">+</button>
+  </span>
+</footer>
+
+<script>
+"use strict";
+
+// =========================================================================
+// 1. GEOMETRIA — tudo derivado destas constantes.
+//
+//    Nenhuma posição é escrita à mão. É a diferença deliberada em relação
+//    ao mapa do adp-map, onde o x/y de cada nó é literal: aqui o layout é
+//    calculado, então acrescentar dez tarefas reespaça sozinho em vez de
+//    empilhar em cima.
+// =========================================================================
+const LARGURA_NO = 176, ALTURA_NO = 54;
+const FOLGA_X = 66, FOLGA_Y = 16;
+const ALTURA_ARTEFATO = 22, FOLGA_ARTEFATO = 7;
+const ALTURA_PORTAO = 40;
+const MARGEM_ESQ = 200, MARGEM_TOPO = 132;   // topo reservado à espinha
+const FOLGA_FAIXA = 34;
+const BLOCO_LARGURA = 28, BLOCO_ALTURA = 24, BLOCO_Y = 40;
+
+const FAIXAS = ["Dissertação", "App EEG", "Transformer"];
+
+const ns = "http://www.w3.org/2000/svg";
+const mapaEl = document.getElementById("mapa");
+const fiosEl = document.getElementById("fios");
+const palcoEl = document.getElementById("palco");
+const lenteEl = document.getElementById("lente");
+
+let ESTADO = null;
+let NOS = [];
+let escala = 1, tx = 0, ty = 0;
+let larguraMapa = 1200, alturaMapa = 800;
+
+const esc = (s) => String(s === null || s === undefined ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// "Correções" se dissolve: a trilha existe no quadro, mas o desenho tem três
+// faixas. Correção é sempre correção DE alguma coisa, e o nó entra na faixa
+// do que ela corrigiu.
+const faixaDe = (t) => (FAIXAS.includes(t.trilha) ? t.trilha : "Dissertação");
+
+// =========================================================================
+// 2. CAMADAS — a coluna de cada tarefa é o caminho mais longo até ela.
+//
+//    Caminho mais longo, e não busca em largura: com o mais curto, uma
+//    tarefa com dois predecessores em colunas diferentes cairia à esquerda
+//    de um deles e a seta apontaria para trás. O mais longo garante que
+//    toda aresta aponte da esquerda para a direita, que é o que faz o
+//    desenho se ler como ordem.
+// =========================================================================
+function calcularCamadas(n, arestas) {
+  const entram = Array.from({ length: n }, () => []);
+  for (const a of arestas) entram[a.para].push(a.de);
+
+  const camada = new Array(n).fill(0);
+  const estado = new Array(n).fill(0);   // 0 intocado, 1 em visita, 2 pronto
+  const ciclos = [];
+
+  function visitar(i) {
+    if (estado[i] === 2) return camada[i];
+    if (estado[i] === 1) {
+      // Ciclo. Reportado e cortado aqui em vez de estourar a pilha: um grafo
+      // declarado à mão vai ter ciclo algum dia, e a página tem que abrir
+      // mostrando qual, não travar o navegador.
+      ciclos.push(i);
+      return 0;
+    }
+    estado[i] = 1;
+    let maior = 0;
+    for (const p of entram[i]) maior = Math.max(maior, visitar(p) + 1);
+    estado[i] = 2;
+    camada[i] = maior;
+    return maior;
+  }
+  for (let i = 0; i < n; i++) visitar(i);
+  return { camada, ciclos };
+}
+
+// Ordena as tarefas de uma mesma faixa e coluna pela média das linhas dos
+// predecessores. Três varreduras tiram a maioria dos cruzamentos sem
+// escrever um Sugiyama inteiro, que seria complexidade sem problema: são 32
+// nós, não 3200.
+function ordenarPorBaricentro(grupos, arestas, linhaDe) {
+  for (let passada = 0; passada < 3; passada++) {
+    for (const chave of Object.keys(grupos)) {
+      const g = grupos[chave];
+      const peso = new Map();
+      for (const i of g) {
+        const preds = arestas.filter((a) => a.para === i)
+                             .map((a) => linhaDe.get(a.de))
+                             .filter((v) => v !== undefined);
+        peso.set(i, preds.length ? preds.reduce((s, v) => s + v, 0) / preds.length
+                                 : (linhaDe.get(i) || 0));
+      }
+      g.sort((a, b) => peso.get(a) - peso.get(b));
+      g.forEach((i, k) => linhaDe.set(i, k));
+    }
+  }
+}
+
+// Quantas linhas por faixa e coluna. Não é constante: é escolhida para o
+// mapa ficar com a MESMA PROPORÇÃO da janela.
+//
+// Fixar o número dava os dois extremos ruins. Com poucas linhas o desenho
+// vira uma tira longa que só cabe a 30% de zoom; com muitas, uma coluna
+// alta e estreita que deixa dois terços do canvas vazio — que foi
+// exatamente o defeito da primeira tentativa desta página.
+//
+// A estimativa é grosseira de propósito: ela só precisa escolher entre
+// cinco candidatos, e o `ajustar()` corrige o resto.
+// Roda o empacotamento de verdade para um dado teto de linhas e devolve a
+// ocupação resultante. É a mesma conta que `montar` faz — e é por isso que
+// existe como função: a primeira versão de `escolherMaxLinhas` ESTIMAVA a
+// forma com `ceil(tarefas_da_faixa / L)`, que não descreve o que o
+// empacotamento produz, porque quem tem sucessor fica preso na sua camada e
+// não participa do preenchimento. O resultado era escolher o teto medindo a
+// proporção de um mapa que não existia.
+function empacotar(tarefas, camada, temSucessor, L) {
+  const ocupacao = {};
+  const coluna = new Array(tarefas.length).fill(0);
+  const ordem = tarefas.map((t, i) => i).sort((a, b) => camada[a] - camada[b]);
+  for (const i of ordem) {
+    const f = faixaDe(tarefas[i]);
+    let c = camada[i];
+    if (!temSucessor.has(i)) {
+      while ((ocupacao[f + "|" + c] || 0) >= L) c++;
+    }
+    coluna[i] = c;
+    ocupacao[f + "|" + c] = (ocupacao[f + "|" + c] || 0) + 1;
+  }
+  const linhasDaFaixa = {};
+  for (const f of FAIXAS) linhasDaFaixa[f] = 1;
+  let maiorColuna = 0;
+  for (const chave of Object.keys(ocupacao)) {
+    const [f, c] = chave.split("|");
+    linhasDaFaixa[f] = Math.max(linhasDaFaixa[f], ocupacao[chave]);
+    maiorColuna = Math.max(maiorColuna, +c);
+  }
+  return { coluna, linhasDaFaixa, maiorColuna };
+}
+
+// O teto de linhas por faixa e coluna, escolhido para o mapa sair com a
+// MESMA PROPORÇÃO da janela. Cada candidato é empacotado de verdade e
+// medido; nada de estimativa.
+function escolherMaxLinhas(tarefas, camada, temSucessor) {
+  const alturaLinha = ALTURA_NO + ALTURA_ARTEFATO + FOLGA_ARTEFATO + FOLGA_Y;
+  const alvo = Math.max(0.6, palcoEl.clientWidth / Math.max(1, palcoEl.clientHeight));
+
+  let melhor = 4, menorErro = Infinity;
+  for (let L = 2; L <= 6; L++) {
+    const r = empacotar(tarefas, camada, temSucessor, L);
+    const largura = MARGEM_ESQ + (r.maiorColuna + 2) * (LARGURA_NO + FOLGA_X) + 60;
+    let altura = MARGEM_TOPO + 20;
+    for (const f of FAIXAS) altura += r.linhasDaFaixa[f] * alturaLinha + FOLGA_FAIXA;
+    const erro = Math.abs(Math.log((largura / altura) / alvo));
+    if (erro < menorErro) { menorErro = erro; melhor = L; }
+  }
+  return melhor;
+}
+
+// =========================================================================
+// 3. MONTAGEM
+// =========================================================================
+function montar() {
+  const tarefas = ESTADO.tarefas.lista;
+  const g = ESTADO.grafo;
+  const arestas = g.arestas;
+
+  const { camada, ciclos } = calcularCamadas(tarefas.length, arestas);
+
+  // --- empacotamento em colunas ------------------------------------------
+  //
+  // A camada sozinha dá um desenho alto e estreito: a maioria das tarefas
+  // não tem dependência declarada, então todas caem na camada 0 e a faixa
+  // da Dissertação virava uma pilha de oito numa coluna, com o resto do
+  // canvas vazio.
+  //
+  // A saída usa uma propriedade do grafo: mover uma tarefa para a DIREITA
+  // nunca quebra a ordem das setas, só mover para a esquerda quebra. Então
+  // quem NÃO tem sucessor pode ser empurrado para qualquer coluna à direita
+  // da sua camada, e é isso que espalha a faixa. Quem tem sucessor fica
+  // exatamente na sua camada, senão a seta apontaria para trás.
+  const temSucessor = new Set(arestas.map((a) => a.de));
+  const MAX_LINHAS = escolherMaxLinhas(tarefas, camada, temSucessor);
+  const colunaDe = empacotar(tarefas, camada, temSucessor, MAX_LINHAS).coluna;
+
+  const grupos = {};
+  const linhaDe = new Map();
+  tarefas.forEach((t, i) => {
+    const chave = faixaDe(t) + "|" + colunaDe[i];
+    (grupos[chave] = grupos[chave] || []).push(i);
+  });
+  for (const chave of Object.keys(grupos)) grupos[chave].forEach((i, k) => linhaDe.set(i, k));
+  ordenarPorBaricentro(grupos, arestas, linhaDe);
+
+  // altura de cada faixa = maior número de linhas que ela usa em qualquer
+  // coluna. Faixa com uma tarefa só não gasta a altura de uma com seis.
+  const linhasDaFaixa = {};
+  for (const f of FAIXAS) linhasDaFaixa[f] = 1;
+  for (const chave of Object.keys(grupos)) {
+    const f = chave.split("|")[0];
+    linhasDaFaixa[f] = Math.max(linhasDaFaixa[f], grupos[chave].length);
+  }
+
+  const alturaLinha = ALTURA_NO + ALTURA_ARTEFATO + FOLGA_ARTEFATO + FOLGA_Y;
+  const topoDaFaixa = {};
+  let y = MARGEM_TOPO;
+  for (const f of FAIXAS) {
+    topoDaFaixa[f] = y;
+    y += linhasDaFaixa[f] * alturaLinha + FOLGA_FAIXA;
+  }
+  const alturaTotal = y + 20;
+
+  const xDaCamada = (c) => MARGEM_ESQ + c * (LARGURA_NO + FOLGA_X);
+  const maxCamada = Math.max(0, ...colunaDe);
+  const larguraTotal = xDaCamada(maxCamada + 1) + LARGURA_NO + 60;
+
+  NOS = [];
+  const pos = new Map();
+
+  tarefas.forEach((t, i) => {
+    const f = faixaDe(t);
+    const x = xDaCamada(colunaDe[i]);
+    const yy = topoDaFaixa[f] + (linhaDe.get(i) || 0) * alturaLinha;
+    pos.set(i, { x, y: yy, w: LARGURA_NO, h: ALTURA_NO });
+    const cor = t.bloqueada ? "#ffb340" : t.feita ? "#4dffa6" : "#1b4d35";
+    NOS.push({
+      tipo: "tarefa", i, x, y: yy, w: LARGURA_NO, h: ALTURA_NO, cor,
+      classe: "no " + (t.feita ? "feita" : "aberta"),
+      html: `<div class="cx"><div class="t">${esc(t.rotulo)}</div>` +
+            `<span class="selo">${t.feita ? "feita" : t.bloqueada ? "travada" : "aberta"}</span>` +
+            `<span class="meta">${t.xp === null ? "?" : t.xp} XP</span></div>`,
+    });
+  });
+
+  const mapaArq = {};
+  for (const a of ESTADO.arquitetura) mapaArq[a.id] = a;
+  for (const chave of Object.keys(g.artefatos)) {
+    const i = +chave;
+    const arq = mapaArq[g.artefatos[chave]];
+    const p = pos.get(i);
+    if (!arq || !p) continue;
+    const cor = arq.estado === "rodado" ? "#2aa870" : arq.estado === "escrito" ? "#ffb340" : "#e07a7a";
+    NOS.push({
+      tipo: "artefato", arq, deTarefa: i, cor,
+      x: p.x + 14, y: p.y + ALTURA_NO + FOLGA_ARTEFATO,
+      w: LARGURA_NO - 14, h: ALTURA_ARTEFATO,
+      classe: "no artefato",
+      html: `<div class="cx"><div class="t">${esc(arq.arquivo.split("/").pop())}</div></div>`,
+    });
+  }
+
+  // Portões à direita de tudo: eles não têm predecessor, têm consequência.
+  g.portoes.forEach((p, k) => {
+    const f = FAIXAS.includes(p.trilha) ? p.trilha : "Dissertação";
+    const x = xDaCamada(maxCamada + 1);
+    const yy = topoDaFaixa[f] + Math.min(linhasDaFaixa[f] - 1, k) * alturaLinha;
+    NOS.push({
+      tipo: "portao", portao: p, x, y: yy, w: LARGURA_NO, h: ALTURA_PORTAO, cor: "#ffb340",
+      classe: "no portao",
+      html: `<div class="cx"><div class="t">${esc(p.titulo)}</div></div>`,
+    });
+  });
+
+  desenhar(arestas, pos, topoDaFaixa, linhasDaFaixa, alturaLinha, alturaTotal, larguraTotal, ciclos);
+}
+
+function elNo(n, idx) {
+  const el = document.createElement("div");
+  el.className = n.classe;
+  el.style.cssText = `left:${n.x}px;top:${n.y}px;width:${n.w}px;height:${n.h}px;--a:${n.cor}`;
+  el.innerHTML = n.html;
+  el.dataset.idx = idx;
+  el.addEventListener("click", (e) => { e.stopPropagation(); abrirLente(idx, el); });
+  return el;
+}
+
+function porta(p, lado) {
+  if (lado === "d") return [p.x + p.w, p.y + p.h / 2];
+  if (lado === "e") return [p.x, p.y + p.h / 2];
+  if (lado === "b") return [p.x + p.w / 2, p.y + p.h];
+  return [p.x + p.w / 2, p.y];
+}
+
+function fio(d, cor, tracejado, largura, comSeta) {
+  const el = document.createElementNS(ns, "path");
+  el.setAttribute("d", d);
+  el.setAttribute("fill", "none");
+  el.setAttribute("stroke", cor);
+  el.setAttribute("stroke-width", largura || 1.4);
+  if (tracejado) el.setAttribute("stroke-dasharray", tracejado);
+  if (comSeta) el.setAttribute("marker-end", "url(#seta)");
+  fiosEl.appendChild(el);
+  return el;
+}
+
+function desenhar(arestas, pos, topoDaFaixa, linhasDaFaixa, alturaLinha,
+                  alturaTotal, larguraTotal, ciclos) {
+  mapaEl.querySelectorAll(".no,.faixa-fundo,.faixa-nome,.faixa-conta,.bloco,.fase,.bloco-rot,.fase-faixa")
+        .forEach((e) => e.remove());
+  fiosEl.innerHTML = "";
+  fiosEl.setAttribute("width", larguraTotal);
+  fiosEl.setAttribute("height", alturaTotal);
+  mapaEl.style.width = larguraTotal + "px";
+  mapaEl.style.height = alturaTotal + "px";
+
+  const defs = document.createElementNS(ns, "defs");
+  defs.innerHTML =
+    '<marker id="seta" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">' +
+    '<path d="M0,1 L7,4 L0,7 Z" fill="#2aa870"/></marker>' +
+    '<marker id="seta-ambar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">' +
+    '<path d="M0,1 L7,4 L0,7 Z" fill="#ffb340"/></marker>';
+  fiosEl.appendChild(defs);
+
+  // --- fundo e rótulo das faixas -----------------------------------------
+  const tarefas = ESTADO.tarefas.lista;
+  for (const f of FAIXAS) {
+    const alt = linhasDaFaixa[f] * alturaLinha;
+    const fundo = document.createElement("div");
+    fundo.className = "faixa-fundo";
+    fundo.style.cssText = `top:${topoDaFaixa[f] - 14}px;height:${alt + 6}px;width:${larguraTotal}px`;
+    mapaEl.appendChild(fundo);
+
+    const nome = document.createElement("div");
+    nome.className = "faixa-nome";
+    nome.style.cssText = `left:16px;top:${topoDaFaixa[f] + 2}px`;
+    nome.textContent = f;
+    mapaEl.appendChild(nome);
+
+    const daFaixa = tarefas.filter((t) => faixaDe(t) === f);
+    const conta = document.createElement("div");
+    conta.className = "faixa-conta";
+    conta.style.cssText = `left:16px;top:${topoDaFaixa[f] + 20}px`;
+    conta.textContent = `${daFaixa.filter((t) => t.feita).length}/${daFaixa.length} · ` +
+      `${daFaixa.filter((t) => t.feita).reduce((s, t) => s + (t.xp || 0), 0)} XP`;
+    mapaEl.appendChild(conta);
+  }
+
+  // --- a espinha do currículo --------------------------------------------
+  const cur = ESTADO.curriculo;
+  if (cur.disponivel) {
+    const blocos = cur.fases.flatMap((f) => f.blocos.map((b) => ({ ...b, fase: f })));
+    const passo = (larguraTotal - MARGEM_ESQ - 70) / Math.max(1, blocos.length - 1);
+    blocos.forEach((b, k) => {
+      const x = MARGEM_ESQ + k * passo;
+
+      if (k === 0 || b.fase.n !== blocos[k - 1].fase.n) {
+        const rot = document.createElement("div");
+        rot.className = "fase";
+        rot.style.cssText = `left:${x - 10}px;top:10px`;
+        rot.textContent = `fase ${b.fase.n} · ${b.fase.nome}`;
+        mapaEl.appendChild(rot);
+        const div = document.createElement("div");
+        div.className = "fase-faixa";
+        div.style.cssText = `left:${x - 16}px;top:24px;height:${alturaTotal - 30}px`;
+        mapaEl.appendChild(div);
+      }
+
+      const el = document.createElement("div");
+      el.className = "bloco" + (b.concluido ? " feito" : "");
+      el.style.cssText = `left:${x}px;top:${BLOCO_Y}px;width:${BLOCO_LARGURA}px;height:${BLOCO_ALTURA}px`;
+      el.textContent = b.n;
+      el.title = b.titulo;
+      el.addEventListener("click", (ev) => { ev.stopPropagation(); abrirLenteBloco(b); });
+      mapaEl.appendChild(el);
+
+      // O titulo do bloco NAO e desenhado: treze rotulos girados a 34 graus
+      // viravam serragem visual no zoom de enquadramento, e o pedido desta
+      // pagina foi tirar texto. Ele vive no title (tooltip) e no painel.
+
+      // O fio de cada bloco para cada faixa que ele toca. É a ÚNICA ligação
+      // entre trilhas DERIVADA de dado real: o campo **Trilha:** do
+      // Curriculo.md é multivalorado em 7 dos 13 blocos.
+      for (const trilha of b.trilhas) {
+        if (!FAIXAS.includes(trilha)) continue;
+        const yAlvo = topoDaFaixa[trilha] - 14;
+        const xc = x + BLOCO_LARGURA / 2;
+        fio(`M${xc} ${BLOCO_Y + BLOCO_ALTURA} L${xc} ${yAlvo}`,
+            b.concluido ? "rgba(77,255,166,0.28)" : "rgba(27,77,53,0.6)", "2 4", 1, false);
+        const c = document.createElementNS(ns, "circle");
+        c.setAttribute("cx", xc); c.setAttribute("cy", yAlvo); c.setAttribute("r", "2.6");
+        c.setAttribute("fill", b.concluido ? "#4dffa6" : "#1b4d35");
+        fiosEl.appendChild(c);
+      }
+    });
+  }
+
+  // --- as arestas entre tarefas -------------------------------------------
+  for (const a of arestas) {
+    const de = pos.get(a.de), para = pos.get(a.para);
+    if (!de || !para) continue;
+    const mesmaLinha = Math.abs(de.y - para.y) < 4;
+    const ambasFeitas = tarefas[a.de].feita && tarefas[a.para].feita;
+    const cor = ambasFeitas ? "rgba(77,255,166,0.40)" : "rgba(42,168,112,0.60)";
+    const tracejado = ambasFeitas ? null : "4 4";
+
+    let d;
+    if (mesmaLinha && para.x > de.x) {
+      const A = porta(de, "d"), B = porta(para, "e");
+      const k = Math.max(30, (B[0] - A[0]) * 0.45);
+      d = `M${A[0]} ${A[1]} C ${A[0] + k} ${A[1]}, ${B[0] - k} ${B[1]}, ${B[0]} ${B[1]}`;
+    } else {
+      // linhas ou faixas diferentes: sai por baixo e entra por cima, que é o
+      // roteamento que não corta o traço horizontal de ninguém
+      const desce = para.y > de.y;
+      const A = porta(de, desce ? "b" : "t");
+      const B = porta(para, desce ? "t" : "b");
+      const k = Math.max(26, Math.abs(B[1] - A[1]) * 0.45);
+      d = `M${A[0]} ${A[1]} C ${A[0]} ${A[1] + (desce ? k : -k)}, ` +
+          `${B[0]} ${B[1] - (desce ? k : -k)}, ${B[0]} ${B[1]}`;
+    }
+    fio(d, cor, tracejado, ambasFeitas ? 1.6 : 1.2, true);
+  }
+
+  // --- fio do artefato para a tarefa que o construiu ----------------------
+  for (const n of NOS) {
+    if (n.tipo !== "artefato") continue;
+    const p = pos.get(n.deTarefa);
+    if (!p) continue;
+    fio(`M${p.x + 24} ${p.y + p.h} L${p.x + 24} ${n.y}`, "rgba(42,168,112,0.4)", null, 1, false);
+  }
+
+  // --- fio do portão para o que ele trava ---------------------------------
+  for (const n of NOS) {
+    if (n.tipo !== "portao") continue;
+    for (const alvo of n.portao.trava) {
+      const p = pos.get(alvo);
+      if (!p) continue;
+      const A = porta(n, "e"), B = porta(p, "d");
+      const k = Math.max(30, Math.abs(B[0] - A[0]) * 0.4);
+      const el = fio(`M${A[0]} ${A[1]} C ${A[0] - k} ${A[1]}, ${B[0] + k} ${B[1]}, ${B[0]} ${B[1]}`,
+                     "rgba(255,179,64,0.5)", "3 3", 1.3, false);
+      el.setAttribute("marker-end", "url(#seta-ambar)");
+    }
+  }
+
+  NOS.forEach((n, i) => mapaEl.appendChild(elNo(n, i)));
+
+  if (ciclos.length) console.warn("ciclo no grafo declarado, cortado no desenho:", ciclos);
+  ajustar(larguraTotal, alturaTotal);
+}
+
+// =========================================================================
+// 4. PAINEL LATERAL — o detalhe vive aqui, e não na página.
+// =========================================================================
+function abrirLente(idx, el) {
+  const n = NOS[idx];
+  document.querySelectorAll(".no.sel").forEach((x) => x.classList.remove("sel"));
+  if (el) el.classList.add("sel");
+  lenteEl.style.setProperty("--a", n.cor);
+  const corpo = document.getElementById("lente-corpo");
+
+  if (n.tipo === "tarefa") corpo.innerHTML = htmlTarefa(n.i);
+  else if (n.tipo === "artefato") corpo.innerHTML = htmlArtefato(n.arq);
+  else corpo.innerHTML = htmlPortao(n.portao);
+
+  corpo.querySelectorAll("[data-ir]").forEach((a) => {
+    a.addEventListener("click", () => {
+      const alvo = NOS.findIndex((x) => x.tipo === "tarefa" && x.i === +a.dataset.ir);
+      if (alvo >= 0) {
+        centralizar(NOS[alvo]);
+        abrirLente(alvo, mapaEl.querySelector('.no[data-idx="' + alvo + '"]'));
+      }
+    });
+  });
+  lenteEl.classList.add("aberta");
+  document.body.classList.add("lente-aberta");
+}
+
+function htmlTarefa(i) {
+  const t = ESTADO.tarefas.lista[i];
+  const g = ESTADO.grafo;
+  const lista = ESTADO.tarefas.lista;
+
+  const destrava = g.arestas.filter((a) => a.de === i);
+  const dependeDe = g.arestas.filter((a) => a.para === i);
+  const portoes = g.portoes.filter((p) => p.trava.indexOf(i) >= 0);
+
+  const lig = (outro, tipo, fonte) =>
+    `<span class="lig" data-ir="${outro}">${esc(lista[outro].rotulo)}` +
+    `<small>${esc(tipo)} · ${esc(fonte)}</small></span>`;
+
+  let h = `<h2>${esc(t.rotulo)}</h2>`;
+  h += `<div class="sub">${esc(t.trilha)} · ${esc(t.estagio || "sem estágio")} · ` +
+       `${t.xp === null ? "?" : t.xp} XP · ${t.feita ? "feita" : "aberta"}</div>`;
+
+  if (t.nota) h += `<h3>o que foi feito</h3><p>${esc(t.nota)}</p>`;
+  if (t.destravada_em) h += `<h3>destravada</h3><div class="cita">em ${esc(t.destravada_em)}</div>`;
+  if (t.bloqueada_por) h += `<h3>bloqueada por</h3><div class="cita alerta">${esc(t.bloqueada_por)}</div>`;
+
+  if (portoes.length) {
+    h += `<h3>portão no caminho</h3>`;
+    for (const p of portoes) {
+      h += `<div class="cita alerta">${esc(p.titulo)}<br>${esc(p.fonte)}</div>`;
+    }
+  }
+  if (dependeDe.length) {
+    h += `<h3>depende de</h3>`;
+    for (const a of dependeDe) h += lig(a.de, a.tipo, a.fonte);
+  }
+  if (destrava.length) {
+    h += `<h3>destrava</h3>`;
+    for (const a of destrava) h += lig(a.para, a.tipo, a.fonte);
+  }
+  if (!dependeDe.length && !destrava.length && !portoes.length) {
+    h += `<h3>ligações</h3><p>Nenhuma dependência declarada para esta tarefa. Isso quer dizer ` +
+         `que ela não foi ligada em <code>backend/scripts/grafo.py</code>, e não que ela seja livre.</p>`;
+  }
+  return h;
+}
+
+function htmlArtefato(a) {
+  const estados = {
+    rodado: "o script existe E o artefato que ele produz está em disco",
+    escrito: "o script existe, mas não produz artefato próprio, ou nunca foi executado",
+    ausente: "o arquivo não existe",
+  };
+  let h = `<h2>${esc(a.titulo)}</h2>`;
+  h += `<div class="sub">${esc(a.estado)}${a.linhas ? " · " + a.linhas + " linhas" : ""}</div>`;
+  h += `<h3>arquivo</h3><div class="cita">${esc(a.arquivo)}</div>`;
+  h += `<h3>papel</h3><p>${esc(a.papel)}</p>`;
+  h += `<h3>o que este estado quer dizer</h3><p>${esc(estados[a.estado] || "")}</p>`;
+  if (a.funcoes && a.funcoes.length) {
+    h += `<h3>funções</h3><div class="cita">${a.funcoes.map(esc).join("<br>")}</div>`;
+  }
+  if (a.saida && a.saida.existe) {
+    h += `<h3>saída em disco</h3><div class="cita">${esc(a.saida.caminho)}<br>` +
+         `${esc((a.saida.quando || "").replace("T", " "))}</div>`;
+  }
+  // O resultado negativo não pode sumir do painel novo: era o compromisso do
+  // painel anterior e continua valendo. Um mapa de progresso que enterra o
+  // que reprovou é propaganda.
+  const qc = ESTADO.qc;
+  if (a.id === "qc" && qc.disponivel && qc.reprovadas.length) {
+    h += `<h3>reprovou</h3>`;
+    for (const r of qc.reprovadas) {
+      h += `<div class="cita alerta">${esc(r.sujeito.replace(/_task.*/, ""))} — falhou: ${esc(r.metricas)}</div>`;
+    }
+    h += `<p style="margin-top:8px">O <i>notch</i> sozinho não zera a rede neste sujeito. O ` +
+         `relatório roda sem passa-baixa, que é o que o app aplica no traçado; as figuras do ` +
+         `caderno incluem o passa-baixa e por isso chegam a 0,27 dB.</p>`;
+  }
+  return h;
+}
+
+function htmlPortao(p) {
+  return `<h2>${esc(p.titulo)}</h2><div class="sub">portão · ${esc(p.trilha)}</div>` +
+    `<h3>o que é</h3><p>${esc(p.texto)}</p>` +
+    `<h3>fonte</h3><div class="cita">${esc(p.fonte)}</div>` +
+    `<h3>por que está no mapa</h3><p>Não é tarefa e não se resolve escrevendo código. Sem estes ` +
+    `nós o desenho afirmaria que só falta implementar, e isso é falso.</p>`;
+}
+
+function abrirLenteBloco(b) {
+  lenteEl.style.setProperty("--a", b.concluido ? "#4dffa6" : "#1b4d35");
+  document.getElementById("lente-corpo").innerHTML =
+    `<h2>${b.n}. ${esc(b.titulo)}</h2>` +
+    `<div class="sub">fase ${b.fase.n} · ${esc(b.fase.nome)} · ` +
+    `${b.concluido ? "concluído" : "não dado"}</div>` +
+    `<h3>trilhas que este bloco toca</h3><p>${b.trilhas.map(esc).join(" · ") || "nenhuma declarada"}</p>` +
+    `<h3>de onde saiu</h3><div class="cita">Curriculo.md — campo Trilha: do bloco ${b.n}</div>` +
+    `<h3>por que isto liga as faixas</h3><p>Um bloco que nomeia duas trilhas é uma ligação entre ` +
+    `elas derivada de dado real, sem nada declarado à mão. Sete dos treze blocos são assim.</p>`;
+  document.querySelectorAll(".no.sel").forEach((x) => x.classList.remove("sel"));
+  lenteEl.classList.add("aberta");
+  document.body.classList.add("lente-aberta");
+}
+
+function fecharLente() {
+  lenteEl.classList.remove("aberta");
+  document.body.classList.remove("lente-aberta");
+  document.querySelectorAll(".no.sel").forEach((x) => x.classList.remove("sel"));
+}
+document.getElementById("fechar-lente").addEventListener("click", fecharLente);
+
+// =========================================================================
+// 5. ZOOM E PAN
+// =========================================================================
+function aplicar() {
+  mapaEl.style.transform = `translate(${tx}px,${ty}px) scale(${escala})`;
+  document.getElementById("pct").textContent = Math.round(escala * 100) + "%";
+}
+
+function ajustar(w, h) {
+  if (w) larguraMapa = w;
+  if (h) alturaMapa = h;
+  const dispW = palcoEl.clientWidth - 40, dispH = palcoEl.clientHeight - 30;
+  escala = Math.min(dispW / larguraMapa, dispH / alturaMapa, 1.3);
+  tx = Math.max(10, (palcoEl.clientWidth - larguraMapa * escala) / 2);
+  ty = 14;
+  aplicar();
+}
+
+function centralizar(n) {
+  tx = palcoEl.clientWidth / 2 - (n.x + n.w / 2) * escala - 180;
+  ty = palcoEl.clientHeight / 2 - (n.y + n.h / 2) * escala;
+  aplicar();
+}
+
+palcoEl.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const f = e.deltaY < 0 ? 1.12 : 0.89;
+  const r = palcoEl.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const nova = Math.min(2.5, Math.max(0.25, escala * f)), k = nova / escala;
+  tx = mx - (mx - tx) * k; ty = my - (my - ty) * k; escala = nova;
+  aplicar();
+}, { passive: false });
+
+let arrastando = false, ax = 0, ay = 0, andou = false;
+palcoEl.addEventListener("mousedown", (e) => {
+  if (e.target.closest(".no") || e.target.closest(".bloco")) return;
+  arrastando = true; andou = false;
+  ax = e.clientX - tx; ay = e.clientY - ty;
+  palcoEl.classList.add("arrastando");
+});
+addEventListener("mousemove", (e) => {
+  if (!arrastando) return;
+  andou = true;
+  tx = e.clientX - ax; ty = e.clientY - ay; aplicar();
+});
+addEventListener("mouseup", () => { arrastando = false; palcoEl.classList.remove("arrastando"); });
+palcoEl.addEventListener("click", (e) => {
+  if (e.target.closest(".no") || e.target.closest(".bloco")) return;
+  // O navegador sintetiza um click no fim de todo arrasto. Sem esta
+  // guarda, cada panoramica fechava a lente e limpava a selecao.
+  if (andou) { andou = false; return; }
+  fecharLente();
+});
+
+document.getElementById("btn-ajustar").addEventListener("click", () => ajustar());
+document.getElementById("btn-mais").addEventListener("click", () => {
+  escala = Math.min(2.5, escala * 1.15); aplicar();
+});
+document.getElementById("btn-menos").addEventListener("click", () => {
+  escala = Math.max(0.25, escala / 1.15); aplicar();
+});
+
+// =========================================================================
+// 6. BOOT
+// =========================================================================
+function montarCabecalho() {
+  const p = ESTADO.painel, l = ESTADO.tarefas.lista;
+  document.getElementById("h-nivel").textContent = p.disponivel ? p.nivel : "—";
+  document.getElementById("h-xp").textContent = p.disponivel ? p.xp : "—";
+  document.getElementById("h-streak").textContent = p.disponivel ? p.streak : "—";
+  document.getElementById("h-tarefas").textContent =
+    `${l.filter((t) => t.feita).length}/${l.length}`;
+  const c = ESTADO.curriculo;
+  const todos = c.disponivel ? c.fases.reduce((s, f) => s.concat(f.blocos), []) : [];
+  document.getElementById("h-bloco").textContent =
+    c.disponivel ? `${todos.filter((b) => b.concluido).length}/${todos.length}` : "—";
+  document.getElementById("h-quando").textContent = ESTADO.gerado.replace("T", " ");
+}
+
+function dizerVazio(texto) {
+  const v = document.createElement("div");
+  v.id = "vazio";
+  v.textContent = texto;
+  palcoEl.appendChild(v);
+}
+
+fetch("/estado")
+  .then((r) => r.json())
+  .then((d) => {
+    ESTADO = d;
+    montarCabecalho();
+    if (!d.tarefas.disponivel || !d.tarefas.lista.length) {
+      dizerVazio(d.tarefas.motivo || "O quadro de tarefas está vazio.");
+      return;
+    }
+    montar();
+    if (d.grafo.erros.length) {
+      console.warn("declarações órfãs em grafo.py:", d.grafo.erros);
+    }
+  })
+  .catch((e) => dizerVazio("Falha ao ler /estado: " + e.message));
+
+addEventListener("resize", () => { if (ESTADO && NOS.length) ajustar(); });
+</script>
+</body>
+</html>

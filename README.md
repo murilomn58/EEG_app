@@ -126,6 +126,66 @@ The forward and inverse operators are built **once at server startup** and held 
 
 ---
 
+## Raw or band-filtered — know which one you're reading
+
+The trace view has a **Bruto** (raw) mode and one mode per band. The difference is not cosmetic, and confusing the two is an easy way to misread a recording.
+
+<table>
+<tr>
+<td width="50%">
+
+![Raw trace: irregular, with baseline drift](docs/images/shot-10-raw-vs-band.png)
+
+**Raw** — the signal as recorded, with only the reference applied. Irregular, drifting, ±650–860 µV here. This is what EEG actually looks like, and what you read clinically.
+
+</td>
+<td width="50%">
+
+![Alpha-filtered trace: regular and oscillatory](docs/images/shot-11-band-filtered.png)
+
+**Alpha (8–13 Hz)** — the same seconds through a narrow bandpass. Regular and rhythmic, ±223–393 µV. Useful for isolating one rhythm; misleading if read as "the patient's trace".
+
+</td>
+</tr>
+</table>
+
+A narrow bandpass makes *any* input look like a clean oscillation — that is what a bandpass does. If the traces ever look implausibly well-behaved, check which mode is selected, and whether you are on real data or the synthetic generator (whose amplitude is around ±0.5, not hundreds of µV).
+
+Raw is the default for exactly this reason.
+
+## Why the trace used to breathe
+
+The signal view had two independent defects that read as one symptom: the traces pulsed, and sometimes froze.
+
+**The pulsing was the vertical scale.** It was recomputed every frame from the largest excursion inside the visible window. The window slides about two samples per frame, so the moment a big artifact scrolled off the left edge the peak dropped in a step and every trace changed size at once. Worse, the value was drawn without removing the baseline, and the app's default is unfiltered signal with a +130 to +145 µV offset — so the peak was dominated by DC and the whole trace slid up and down inside its band.
+
+Now the scale is measured **once**, when the recording loads, from the 95th percentile of each channel's absolute deviation over the entire record. The 95th percentile rather than the maximum: one eye blink is worth ten times the EEG, and scaling by it would flatten everything else for the rest of the session. Each channel label says which scale it is using — `±279.5 p95` for a measured one, `auto` for the damped fallback used on synthetic signal.
+
+**The freezing was the clock.** The maximised signal window is a popup that generates nothing: it receives sample batches over `BroadcastChannel` from the main window, one message per frame. Its sliding window was anchored to the timestamp of the last sample that *arrived*. And the main window — sitting behind the popup, occluded — gets its `requestAnimationFrame` throttled by the browser, while a `Math.min(0.05, dt)` clamp capped it at 50 ms of signal per frame. At 1 fps that is six samples per second, delivered in bursts, against a popup redrawing sixty times a second.
+
+The popup now has its own clock, advanced by wall time and *pulled* toward the data rather than teleported to it, and the main window's clamp went from 0.05 s to 2 s so occlusion stops slowing playback to a twentieth of real speed.
+
+**Two smaller things came out of the same investigation.** A single click on the trace used to freeze the session — and the popup's "Voltar ao vivo" button posted an echo message that the main window does not listen for, so you could not unfreeze it either. Freezing is now a double click, and both windows use one function that picks the right message type for the side it is on.
+
+![The recording loop, with the filter's edge transient marked](docs/images/shot-15-borda-filtro.png)
+
+And since the recording plays on a loop, its two ends sit next to each other. There is no step at the seam — the first and last samples are both zero — but the backend filter's **edge transient** is there, and doubled: standard deviation of ~175 in the first and last second against ~127 in the middle. `qc_relatorio.py` discards that band before measuring (`BORDA_S = 2.0`). The viewer shows it and shades it, because hiding signal is worse than labelling it.
+
+## Task events on the time axis
+
+The recording protocol left marks: a voice told the subject to open their eyes at 47.8 s, to close them at 67.8 s, and so on. Those timestamps ship **inside the dataset** — a `_events.tsv` next to every recording, plus an official dictionary at the release root. No scraping involved.
+
+![Task event labels drawn over the clinical traces](docs/images/shot-12-marcadores-evento.png)
+
+The wizard reads them (`backend/scripts/eventos.py`, exposed as `GET /eventos`) and the trace view draws them as translucent labels anchored to the timestamp, with a thin line running down across the channels. Labels stack across three rows when events crowd together, and any that still would not fit are **dropped rather than truncated** — half a legible word is worse than none — with the count reported in the corner.
+
+> [!NOTE]
+> The event list in the wizard is **editable**, and that is not politeness. The `ds005505` dictionary has a copy-paste error: two distinct levels — `instructed_toCloseEyes` and `instructed_toOpenEyes` — share one description, *"A voice prompt instructed subject to open their eyes"*. In `sub-NDARAC904DMU`'s RestingState file (36 events), **5** carry text that is actually wrong: the `toCloseEyes` ones.
+>
+> The app flags **11**, not 5. That gap is the detector being honest about what it can see: it finds two values collapsed onto one description and has no way to know *which side of the pair* got the wrong text, so it marks the whole pair and reports the collision in `divergencias`. It then shows each event's `value` rather than the suspect description, and lets you fix the label.
+>
+> `adhdata.csv` has **no events at all** — the dataset was published without stimulus markers, which is exactly why this app computes no ERP components. The wizard says so instead of showing an unexplained empty list.
+
 ## The ADHD analysis panels
 
 Four descriptive panels, computed live over the visible buffer. Each carries its own caveat in the interface, because each one deserves one.
@@ -157,45 +217,59 @@ The panels follow the markers reviewed in *Use of EEG to Diagnose ADHD* ([PMC463
 
 ## Architecture
 
-A deliberately small system: one static HTML file for everything interactive, one Python service for the heavy neuroscience.
+A deliberately small system: one static HTML page for everything interactive, one Python service for the heavy neuroscience, and two data banks behind it.
+
+> [!WARNING]
+> **The page is one file, but it is not offline.** `eeg-cerebro-3d.html` loads **three scripts from public CDNs** — `three.min.js` from cdnjs, and `OrbitControls.js` and `OBJLoader.js` from jsDelivr. Without internet access, or behind a firewall that blocks those hosts, everything else still works — traces, filters, re-reference, the analysis panels — but **the 3D brain simply never appears**, and nothing on screen says why. That failure mode looks like a broken app rather than a missing download, which is why it is written here. To run fully offline, save those three files next to the HTML and repoint the three `<script src>` attributes at them.
 
 ```mermaid
 flowchart TB
-    subgraph browser["🌐 Browser — single static HTML file"]
+    subgraph browser["🌐 Browser — one static HTML page + Three.js from CDN"]
         direction TB
+        WIZ["Wizard<br/>bank · treatment · electrode check"]
         UI["Clinical traces<br/>19 channels, 10–20 layout"]
-        FIL["Biquad band filters<br/>δ θ α β γ"]
+        FIL["Biquad band filters<br/>δ θ α β γ · retuned to the measured rate"]
         AN["ADHD analysis panels<br/>TBR · spectrum · sync · Higuchi"]
         R3D["Three.js renderer<br/>brain.obj + fsaverage cortex"]
-        UI --> FIL --> AN
+        WIZ --> UI --> FIL --> AN
         FIL --> R3D
     end
 
     subgraph backend["⚙️ FastAPI service"]
         direction TB
-        CSV["pandas — CSV held in memory"]
-        FWD["Forward model<br/>built once at startup"]
+        CSV["pandas — adhdata CSV in memory"]
+        BIDS["MNE — BIDS .set on demand<br/>129 EGI ch → 19 in 10–20"]
+        PRE["preproc_basico<br/>0.5 Hz high-pass + detected notch<br/>bypassed when treatment = bruto"]
+        FWD["Forward model<br/>built once at startup · 128 Hz · µV"]
         INV["Inverse operator<br/>dSPM · 20,484 vertices"]
+        CSV --> PRE
+        BIDS --> PRE
         CSV --> FWD --> INV
     end
 
-    DATA[("adhdata.csv<br/>121 subjects · 128 Hz")] --> CSV
+    ADHD[("adhdata.csv<br/>121 subjects · 128 Hz · 19 ch")] --> CSV
+    HBN[("HBN ds005505 (BIDS)<br/>500 Hz · 129 EGI ch · ref Cz")] --> BIDS
     FS[("fsaverage template<br/>ico-5 + BEM")] --> FWD
 
-    browser -->|"GET /subjects"| backend
-    browser -->|"GET /raw-data"| backend
-    browser -->|"POST /source-localization"| backend
-    backend -->|"per-vertex activation"| R3D
+    browser -->|"GET /datasets · /dataset-config · /eletrodos"| backend
+    browser -->|"GET /subjects · /eventos"| backend
+    browser -->|"GET /raw-data — preproc nenhum ou basico"| backend
+    browser -->|"POST /source-localization — adhdata only"| backend
+    PRE -->|"channels + notch decisions"| UI
+    INV -->|"per-vertex activation"| R3D
 
     style browser fill:#0d1b2a,stroke:#00b4d8,color:#e0e1dd
     style backend fill:#1b263b,stroke:#48cae4,color:#e0e1dd
-    style DATA fill:#023047,stroke:#219ebc,color:#e0e1dd
+    style ADHD fill:#023047,stroke:#219ebc,color:#e0e1dd
+    style HBN fill:#023047,stroke:#219ebc,color:#e0e1dd
     style FS fill:#023047,stroke:#219ebc,color:#e0e1dd
 ```
 
-### Signal path, from CSV row to colored vertex
+Two banks enter, one shape comes out: whatever the source, the rest of the app reasons in 19 channels named in 10-20, at a rate it was told rather than one it assumed. The preprocessing stage sits on the way out of *both*, and it is bypassed — not silently, but by your choice in the wizard — when the treatment is **bruto**.
 
-The buffer is fed at exactly **128 Hz** — one sample per 1/128 s step, matching the dataset and the rate the biquad filters are designed for. Playback at `1.0x` is therefore real time: a 155-second recording takes 155 seconds to play.
+### Signal path, from raw sample to colored vertex
+
+The buffer is fed at **the recording's own rate** — one sample per 1/`fs` s step, where `fs` is whatever the wizard measured on the file it opened (128 Hz for `adhdata`, 500 Hz for the HBN). It used to be hard-wired to 128. `configurarTaxa()` is the single place that changes it, and it rewrites the loop clock *and* rebuilds the biquads together, because moving one without the other is exactly what produces a plausible, wrong screen: the trace scrolls at the right speed while the bands lie, or the reverse. Playback at `1.0x` is therefore real time in either case: a 155-second recording takes 155 seconds to play.
 
 ```mermaid
 flowchart LR
@@ -242,7 +316,27 @@ The original dataset uses the older labels `T3/T4/T5/T6`. This project uses the 
 
 </details>
 
-### 2. Start the backend
+### 2. Start everything at once
+
+```bash
+python iniciar.py
+```
+
+This brings up all three services and opens the app:
+
+| | |
+|---|---|
+| <http://localhost:8001> | backend (signal, filtering, events) |
+| <http://localhost:5500> | the EEG app |
+| <http://localhost:8002> | the project map |
+
+`Ctrl+C` stops all of them. Pass `--mapa` to open the project map instead of the app, or `--sem-mapa` to skip it.
+
+If a port is already taken — a backend left running by an earlier session, say — the launcher **says so and reuses what is there** rather than starting a doomed second copy. It used to start one anyway, watch it die one second later, and print `backend caiu` while killing the frontend and the map that were both working fine. It also waits for each service to actually answer before opening the browser: the backend loads a 267 MB CSV and builds the source model, and opening the page before that shows an empty screen that looks like a bug.
+
+The sections below describe starting each service by hand, which is what you want when one of them is misbehaving.
+
+### 3. Start the backend
 
 ```bash
 cd backend
@@ -259,7 +353,7 @@ First startup takes a few minutes: it downloads the fsaverage template and build
 [startup] forward/inverse prontos: 20484 vértices, 19 canais
 ```
 
-### 3. Serve the frontend
+### 4. Serve the frontend
 
 ```bash
 python -m http.server 5500
@@ -281,17 +375,164 @@ python -m pytest tests/
 
 ---
 
+## Surveying a HBN-EEG release
+
+Two offline scripts in `backend/scripts/` survey an [HBN-EEG](https://openneuro.org/datasets/ds005505) release before any of it is used for analysis. They answer the two questions that decide whether a release is usable at all: *what is actually on disk*, and *can it be labelled*.
+
+The full ds005505 is **103 GB** (136 subjects, 129 channels, 500 Hz). Download selectively — metadata first, then only the subjects and task you need.
+
+> [!IMPORTANT]
+> **Download it where the app looks for it.** `backend/config.py` is the only module that knows where data lives, and it looks for a release under `RAIZ_DADOS/<accession>` — that is **`C:\dados\hbn\ds005505`** by default, or `<EEG_DADOS>/ds005505` if you set the `EEG_DADOS` environment variable. Anywhere else and the wizard lists the bank as unavailable, printing the path it wanted — after you have moved 103 GB into the wrong folder. The data stays outside the repository on purpose: two projects consume the same recordings, and nothing this large belongs in git.
+
+```python
+import pandas as pd, openneuro as on
+# RAIZ_DADOS/<accession> — the path config.caminho_release() will look in.
+# Set EEG_DADOS first if you want the releases somewhere other than C:\dados\hbn.
+alvo = r"C:\dados\hbn\ds005505"
+
+# metadata only — a few MB. participants.tsv always comes along.
+on.download(dataset="ds005505", target_dir=alvo, include=["/*.json", "/*.tsv"])
+
+p = pd.read_csv(rf"{alvo}\participants.tsv", sep="\t")
+sel = p[(p.RestingState == "available") & p.p_factor.notna()].participant_id.head(10)
+
+on.download(dataset="ds005505", target_dir=alvo,
+            include=[f"{s}/eeg/*task-RestingState*" for s in sel])
+```
+
+```bash
+cd backend
+python scripts/fenotipo_hbn.py  C:/dados/hbn/ds005505/participants.tsv
+python scripts/inventario_hbn.py C:/dados/hbn/ds005505
+```
+
+| Script | Output | Answers |
+|---|---|---|
+| `fenotipo_hbn.py` | `relatorios/fenotipo_hbn.txt` | age, gender and the four psychopathology dimensions, plus how many subjects are missing each field |
+| `inventario_hbn.py` | `relatorios/inventario_hbn.csv` | one row per (subject, task): duration, sampling rate, channel count, `events.tsv` presence |
+
+> [!NOTE]
+> **What the HBN needed, and the one thing it still does not get.** The release records at 500 Hz with 129 EGI channels named `E1…E128`, referenced to Cz. The app no longer assumes 128 Hz and the 19 `Fp1/Fp2/…` names: the wizard measures the rate off the file and `configurarTaxa()` retunes the clock and the biquads to it, and `/raw-data` reduces 129 channels to the 19 analysis channels **in the backend**, translated through the manufacturer's official EGI→10-20 map (`config.MAPA_EGI_1020`) and confirmed by you on a drawn head rather than on a list of names.
+>
+> What does **not** cover the HBN is **source reconstruction**. The forward and inverse operators are built once at startup from a 128 Hz `info` in µV, so `POST /source-localization` returns a 400 explaining itself for any bank other than `adhdata`. dSPM is normalised, so it would have returned a plausible-looking map with nothing on screen to denounce it — refusing is the honest answer until the model is built per bank.
+
+The HBN phenotype offers **four continuous dimensions** (`p_factor`, `attention`, `internalizing`, `externalizing`), not a diagnosis. A binary ADHD label only comes from thresholding `attention` — a methodological choice that has to be declared, not buried in code.
+
+The inventory never aborts: an unreadable `.set` becomes a row with its `erro` column filled and the sweep continues, because the point of the survey is the complete map, holes included.
+
+---
+
+## Preprocessing: high-pass, notch, and the proof it worked
+
+The app's **default** treatment is still raw signal, and the [Limitations](#limitations-read-this-part) table says what that costs. Two files in `backend/scripts/` are what change that when you ask them to: `preproc_basico.py` applies the first two corrections — and the API *imports* it, so choosing **básico** in the wizard runs this exact code, not a copy of it — while `qc_relatorio.py` does the part that matters just as much: it **measures whether they worked**.
+
+```bash
+cd backend
+python scripts/preproc_basico.py ../adhdata.csv v10p      # or a .set from the HBN
+python scripts/qc_relatorio.py   ../adhdata.csv v10p      # or a whole BIDS root
+```
+
+`preproc_basico.py` applies a 0.5 Hz high-pass and then a notch — **in that order**, because a large DC offset makes the notch's edge transient last longer and contaminate more samples.
+
+### The mains frequency is measured, not assumed
+
+`adhdata.csv` carries 50 Hz interference; the HBN was recorded in New York, where the mains run at **60 Hz**. Hard-coding either number is the kind of detail that turns into a silent bug the moment the pipeline moves between datasets — the notch would miss the interference entirely *and* punch a hole in the middle of the gamma band.
+
+So the frequency comes from the spectrum. The same code, unchanged, on the two datasets:
+
+| Dataset | Detected | Peak-over-neighbourhood | Note |
+|---|---|---|---|
+| `adhdata.csv` @ 128 Hz | **50 Hz** | 38.7 dB | only candidate below Nyquist — flagged as won-by-elimination |
+| HBN ds005505 @ 500 Hz | **60 Hz** | 46.0 dB | 45.2 dB margin over 50 Hz |
+
+The HBN's own BIDS sidecar independently declares `"PowerLineFrequency": 60`, which is a pleasant confirmation rather than the source.
+
+Detection refuses to guess. It returns *no frequency* — and says which of three reasons — when there is no peak at all (the data was already notched, and notching blind would destroy neural signal for free), when two candidates are equally strong, or when Nyquist doesn't cover them. One of the ten HBN subjects came back `sem_pico_de_rede`, and got no notch.
+
+### The report is the evidence
+
+`qc_relatorio.py` **imports** `preproc_basico` rather than reimplementing the filters, so what it measures is the pipeline that actually runs. Measured on `adhdata.csv`:
+
+| Metric | Before | After |
+|---|---|---|
+| Channel mean | 152.56 | 0.24 (0.16% residual) |
+| Delta fraction (1–4 Hz) | 0.608 | 0.608 |
+| Mains ratio @50 Hz | +38.23 dB | −0.16 dB |
+| Alpha power preserved | 1.000 | 1.000 |
+
+Two of those rows deserve a word:
+
+**Alpha preserved is the metric people forget.** A filter that zeroes the mean and kills the alpha rhythm along the way passes every other check and has destroyed the recording. Without measuring it, the report would claim success without having verified the one thing the filter was not allowed to do.
+
+**The delta fraction is reported, not graded.** The high-pass cuts at 0.5 Hz, so it only drops delta when the power there was drift leaking up from below. In `adhdata.csv` the spectrum above 1 Hz is *identical* before and after — that energy is real delta activity, and the filter is right to leave it alone. What proves the DC came out is the channel mean.
+
+The mean is judged proportionally rather than against a fixed threshold in µV. That matters for the HBN, where a subject goes from 193,893 to 0.5 — a 99.9997% reduction that any absolute "under 1 µV" limit would fail. Filters are linear and don't care about scale; thresholds do.
+
+> [!NOTE]
+> **A correction to an earlier version of this section.** It used to conclude, from that 99th percentile of ≈136,000, that the HBN sits on "an uncalibrated amplifier scale". The evidence does not support that. The 99th percentile of the *raw* signal is dominated by DC offset, not by EEG amplitude: after treatment the HBN's peak is **76.9** against `adhdata`'s **1240.3**, sixteen times *smaller* and well inside the physiological range. The parsimonious reading is microvolts with a large DC offset. What honestly stands is that **the calibration is unconfirmed**, which is why figures for the HBN label their axis "un. do arquivo" rather than µV.
+
+### One subject fails, and that is in here on purpose
+
+Run the report over `sub-NDARAC904DMU` — the same subject the figures use — and the mains row comes back **FAILED**: 45.02 dB before, 6.20 dB after, against a 3 dB threshold. The figures in the companion notebook report 0.27 dB for the same subject at the same frequency.
+
+Both numbers are right, and the difference is not noise: `qc_relatorio.py` calls `preprocessar` with the app's default — high-pass plus notch, **no low-pass** — because that is what the app applies to the trace you look at. The figures apply all four steps. The 45 Hz cutoff takes another 6 dB out at 60 Hz, and that is the whole gap.
+
+The threshold is not wrong. It is saying that **the notch alone is not enough** for this subject, and that belongs in the README rather than behind the more flattering figure.
+
+Finding this also exposed a defect in the report itself: the per-subject table printed FAILED while the summary six lines below printed "no metric failed". The metrics come out of numpy, and `numpy.bool_(False) is False` evaluates to *false* — the filter for failures used `ok is False` and saw nothing. Fixed at the source (`bool()`) and in the filter (`ok is not None and not ok`), locked by `test_veredito_reprovado_aparece_no_resumo`. A quality report whose summary is never checked against its own rows is a report that only knows how to approve.
+
+---
+
+## The project map
+
+`http://localhost:8002` serves a second, unrelated thing: a flowchart of the whole master's, read from the Obsidian vault and from this repository.
+
+![The three tracks, with the curriculum spine above](docs/images/shot-17-mapa-visao-geral.png)
+
+Three horizontal lanes, one per track. **The horizontal axis is dependency order, not time**: a task's column is the longest path to it through the graph, so everything to its left has to happen first. Above the lanes sits the curriculum spine — 13 blocks in 4 phases, lit when done — and each block drops a dotted line into every track it touches.
+
+Below a finished task hangs the file it built, colored by what is actually on disk: **green** the script exists *and* its artifact is there, **amber** the script exists but never ran, **red** the file is missing. The amber diamonds on the right are blockers that are not tasks at all (research line in dispute, methodology not established, HBN data use agreement not submitted) — without them the map would claim that only code is missing, which is false.
+
+There is no prose on the page. Click any node and the detail opens on the right:
+
+![The side panel, with each edge citing the vault line it came from](docs/images/shot-16-mapa-trilhas.png)
+
+### Where the arrows come from
+
+This is the part worth knowing before trusting the picture. The vault has **exactly one machine-readable dependency in it** — `Tarefas.md:54`, a `🔒 bloqueada por:` marker. Everything else was prose, in four different dialects, spread across `Tarefas.md`, `Rota.md` and `Entregaveis.md`.
+
+So the edges are **declared in `backend/scripts/grafo.py`**, and every one of them carries the `file:line` of the vault text it came from. Where a link is my judgement rather than a citation, the source says `atribuição minha` — a different status, shown as a different status.
+
+That arrangement can drift, and one test exists to catch it: `test_toda_aresta_resolve` requires both ends of every declared edge to still match a real task. Rename a task in the vault and the suite fails naming the orphan, instead of the arrow quietly vanishing from the drawing.
+
+The one thing that is **not** declared: the links *between* tracks. `Curriculo.md` turned out to have real structure — 13 blocks whose `**Trilha:**` field is multi-valued in 7 of them — so those edges are derived from data, with nothing written by hand.
+
+```bash
+cd backend
+python scripts/painel_progresso.py            # serves on 8002
+python scripts/painel_progresso.py --json     # just the state, no server
+python scripts/grafo.py                       # resolve the graph, report orphans
+```
+
+It keeps no state of its own — every load re-reads the files. Point `EEG_VAULT` at your Obsidian vault root if it lives somewhere other than `C:\Obsidian\MESTRADO_ITA`; without it, the map reports why it is empty rather than drawing nothing.
+
 ## API
+
+Seven routes. `dataset_id` defaults to `adhdata` where it is optional and is **required** on the wizard routes, because "which bank" is not a question the server should answer by guessing.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/subjects` | `GET` | Every subject with class label and recording duration |
-| `/raw-data?subject_id=<id>` | `GET` | Full recording for one subject, per channel |
-| `/source-localization` | `POST` | Source reconstruction for a time window |
+| `/datasets` | `GET` | Every bank the app knows, with `disponivel` and — when false — the path it looked in. Unavailable banks are listed, not hidden |
+| `/dataset-config?dataset_id=&subject_id=` | `GET` | What the app *measured* off the bank and how it will configure itself for it — the wizard's confirmation step. Blocks only on a real pipeline limit; signal that merely disagrees with the bank's own documentation passes with a warning |
+| `/subjects?dataset_id=` | `GET` | The subjects of one bank. `classe` and `duracao_s` come filled **only for `adhdata`** — for the HBN both are `null`, because knowing them would mean opening every `.set` before the selector can appear |
+| `/eletrodos?dataset_id=&subject_id=` | `GET` | Every electrode in the recording with its 3D position, plus the suggested 10-20 correspondence and where that map came from — all 129 channels, not just the 19 chosen |
+| `/eventos?dataset_id=&subject_id=` | `GET` | Task events, with `divergencias` for dictionary collisions. An empty list always carries a `motivo`: "this bank has no stimulus markers" and "something failed" must not look alike |
+| `/raw-data?subject_id=&dataset_id=&preproc=` | `GET` | The full recording, per channel, in 10-20 names. `preproc` is `nenhum` (default) or `basico`; `fs`, `unidade` and `amplitude_p99` travel with the data so the frontend does not have to assume any of them, and `basico` also returns which mains frequency was detected and which harmonics came out |
+| `/source-localization` | `POST` | Source reconstruction for a time window — **`adhdata` only**, 400 with an explanation otherwise |
 
 ```jsonc
 // POST /source-localization
-{ "subject_id": "v10p", "t_start": 0.0, "t_end": 2.0, "method": "dSPM" }
+{ "subject_id": "v10p", "t_start": 0.0, "t_end": 2.0, "method": "dSPM", "dataset_id": "adhdata" }
 
 // → 200
 { "values": [/* one per vertex */], "n_vertices": 20484, "time": 0.0, "method": "dSPM" }
@@ -311,7 +552,19 @@ Honesty about what a tool *cannot* do is what makes it usable in a scientific co
 
 **The synchronization matrix is a correlation, not coherence.** It correlates band-filtered signals in the time domain. That is a useful, cheap proxy — but it is not magnitude-squared coherence, and should not be reported as such.
 
-**No artifact rejection.** Eye blinks, muscle tension, and electrode drift are all still in the signal. Serious analysis needs ICA-based cleaning first.
+**No ICA, and no artifact rejection.** This used to read "no preprocessing at all", and that is no longer true: the 0.5 Hz high-pass and the notch at the *measured* mains frequency are implemented, run in the backend (`preproc_basico.py`), are reachable from the wizard's **básico** treatment and from `GET /raw-data?preproc=basico`, and carry the before/after evidence [shown above](#the-report-is-the-evidence).
+
+What is absent is everything that comes *after* those two steps: **no ICA**, no epoch rejection, no bad-channel interpolation, no automatic exclusion of the artifacts the ⚡ event finder locates. And the wizard's default treatment is still **bruto** — the signal exactly as it left the amplifier — so unless you chose otherwise, that is what the numbers on screen describe. A spectral analysis of the dataset in that raw state shows what it costs:
+
+| Finding | Measured | Consequence |
+|---|---|---|
+| **50 Hz mains interference** | +6 to +16 dB above the alpha peak | No notch filter was applied when recording; the line frequency is among the strongest components in the signal |
+| **DC offset and drift** | channel means of +130 to +145 instead of 0 | Delta absorbs 47–72% of total power, much of it drift rather than neural activity |
+| **Amplitude** | 99th percentile of 500–1200 µV | 10–20× physiological EEG; the recordings carry substantial artifact, and the unit scaling is not verified |
+
+A rigorous pipeline would apply a high-pass around 0.5 Hz, a notch at the mains frequency, and ICA-based artifact removal before any of the band measurements shown here. The first two are in — the third is not. Read the band numbers as *descriptive of the signal in the treatment you selected*, and check which treatment that is before quoting one.
+
+**Eye blinks, muscle tension, and electrode drift** survive the high-pass and the notch — they are broadband and in-band, which is precisely why ICA exists. The ⚡ event finder locates the worst of them, but nothing removes them.
 
 **Ad-hoc noise covariance.** With no empty-room or baseline recording in the dataset, the inverse operator uses a diagonal ad-hoc covariance — a reasonable default, and a real approximation.
 
@@ -370,21 +623,124 @@ Issues and pull requests are welcome — particularly around artifact rejection,
 <summary>Project layout</summary>
 
 ```
-├── eeg-cerebro-3d.html      # the entire frontend — one self-contained file
+├── eeg-cerebro-3d.html      # the whole frontend in one file — except Three.js, from CDN
+├── iniciar.py               # starts backend + frontend + map, waits for each to answer
 ├── backend/
 │   ├── app.py               # FastAPI routes + startup lifecycle
-│   ├── csv_data.py          # dataset loading and time-window slicing
+│   ├── config.py            # the only module that knows where data lives (EEG_DADOS)
+│   ├── csv_data.py          # adhdata loading and time-window slicing
+│   ├── canais.py            # analysis channel names → this bank's channel names
+│   ├── eletrodos.py         # electrode 3D positions for the confirmation screen
+│   ├── verificar_referencia.py  # infers a file's reference from per-channel statistics
 │   ├── mne_setup.py         # forward model + inverse operator
 │   ├── mne_infer.py         # applies the inverse solution
+│   ├── export_fsaverage_mesh.py # run once: fsaverage cortex → .obj + vertex indices
+│   ├── scripts/             # part offline tooling, part imported by the API
+│   │   ├── eventos.py           # task events → GET /eventos          ← imported by app.py
+│   │   ├── preproc_basico.py    # high-pass + detected notch          ← imported by app.py
+│   │   ├── qc_relatorio.py      # before/after evidence that the filters worked
+│   │   ├── inventario_hbn.py    # walks a BIDS release → one row per (subject, task)
+│   │   ├── fenotipo_hbn.py      # participants.tsv → phenotype distributions
+│   │   ├── figuras_limpeza.py   # the signal-cleaning figures
+│   │   ├── grafo.py             # task dependencies, each with the vault line it came from
+│   │   └── painel_progresso.py  # the project map, served on 8002
 │   └── tests/               # pytest suite
 ├── assets/                  # brain.obj + fsaverage cortex mesh
-├── docs/                    # design notes, implementation plan, images
-└── legacy/                  # earlier dipole prototype
+├── relatorios/              # generated reports (inventory, phenotype, QC)
+└── docs/                    # design notes, implementation plan, images
 ```
+
+`scripts/` is **not** offline-only, and calling it that hid a real coupling: `app.py` puts the folder on `sys.path` and imports `eventos` and `preproc_basico` from it, so `/eventos` and `/raw-data?preproc=basico` are those two files. The other six run from the command line. The advantage of the arrangement is that `qc_relatorio.py` measures the same `preproc_basico` the API serves — the report cannot drift from the pipeline, because there is only one.
 
 </details>
 
-> **Interface language:** the UI is in Brazilian Portuguese. The codebase and this documentation are in English.
+> **Language:** the interface **and the codebase** are in Brazilian Portuguese — identifiers, comments and docstrings included. This documentation is the part that is in English.
+
+---
+
+## Data attribution and licensing
+
+This repository ships **no recordings**. It reads two public banks, and each one
+comes with its own terms — different terms. Attribution here is not a courtesy:
+one of the two releases requires it in writing, by name, with two DOIs.
+
+### HBN-EEG, release 1 (`ds005505`)
+
+The EEG section of the **Healthy Brain Network** project.
+It is run by the **Child Mind Institute**, and curated into BIDS.
+
+| | |
+|---|---|
+| **Dataset** | Healthy Brain Network (HBN) EEG — Release 1 |
+| **Dataset DOI** | `doi:10.18112/openneuro.ds005505.v1.0.1` |
+| **License** | **CC-BY-SA 4.0** |
+| **Ethics approval** | Chesapeake Institutional Review Board |
+
+**Authors**, exactly as the release lists them in `dataset_description.json`:
+Seyed Yahya Shirazi, Alexandre Franco, Maurício Scopel Hoffmann, Nathalia B.
+Esper, Dung Truong, Arnaud Delorme, Michael Milham, Scott Makeig.
+
+The release states how it wants to be acknowledged, and it asks for **two**
+citations, not one:
+
+> Please cite the dataset paper (<https://doi.org/10.1101/2024.10.03.615261>) as well as the original HBN publication (<https://dx.doi.org/10.1038/sdata.2017.181>).
+
+Both DOIs go in your references if anything you publish touched this bank through
+this app. And `CC-BY-SA` is share-alike: a derivative of the *data* inherits the
+license. The MIT license below covers the code in this repository, and only the
+code — it does not relicense a single sample.
+
+> [!NOTE]
+> The releases are not uniform. The eleven numbered releases are CC-BY-SA 4.0;
+> the one labelled **NC** is CC-BY-NC-SA-4.0 and prohibits commercial use.
+> Everything measured in this README came from `ds005505` — release 1, 136
+> subjects — and says nothing about the other ten.
+
+### adhdata
+
+| | |
+|---|---|
+| **Dataset** | EEG data for ADHD / Control children |
+| **Authors** | Nasrabadi, Ali Motie; Allahverdy, Armin; Samavati, Mehdi; Mohammadi, Mohammad Reza (2020) |
+| **Publisher** | IEEE DataPort |
+| **DOI** | [10.21227/rzfh-zn36](https://doi.org/10.21227/rzfh-zn36) |
+| **License** | **not confirmed** — read on |
+
+**The license of this one could not be confirmed.** The IEEE DataPort page gives
+the authors, the creation date and the DOI, and labels the dataset *open access*
+behind a free account — but it states **no license**: no Creative Commons
+variant, no terms-of-use text (page read on 2026-08-28). So this README does not
+name one. What holds regardless: cite the authors and the DOI — the BibTeX in
+[Citing the tools](#citing-the-tools) has both — and read IEEE DataPort's terms
+for the account you download it with before redistributing anything derived from
+it. An absent license is not a permissive license.
+
+### What this data actually is
+
+Both banks are **EEG recordings of children and adolescents, each one attached to
+a psychiatric label**. `adhdata` is 121 children, every row carrying `ADHD` or
+`Control` next to the subject `ID`. HBN release 1 is 136 participants aged 5.2 to
+21.7 years, and `participants.tsv` carries four continuous psychopathology
+dimensions derived from the CBCL — `p_factor`, `attention`, `internalizing`,
+`externalizing`. This is health data about minors. It is not a demo file, and the
+fact that it downloads with one command does not make it one.
+
+What that means in practice for anyone who clones this repository:
+
+- **The data does not come with the clone.** Neither bank is in this tree and neither is fetched for you. You download each one yourself, under your own account and your own agreement with the provider, and it stays outside the repository: `adhdata.csv` is in `.gitignore`, and the HBN releases live under `C:\dados\hbn` (or `$EEG_DADOS`), which `backend/config.py` points at without ever writing inside it.
+- **The app serves on `127.0.0.1` and nowhere else.** `iniciar.py` binds the frontend with `--bind 127.0.0.1`, the backend runs on uvicorn's loopback default, and the backend's CORS rule only accepts origins matching `http://(localhost|127\.0\.0\.1):\d+`. That is deliberate: the frontend server publishes the *whole project root*, so on `0.0.0.0` it hands out any recording sitting in it, to anyone on the Wi-Fi, without authentication. Do not "just add `--host 0.0.0.0`" to make it reachable from another machine.
+- **The generated reports carry the subject identifier.** `relatorios/inventario_hbn.csv` has one row per (subject, task) keyed by `sub-NDAR…`, and `relatorios/qc_relatorio.txt` names the subject file in its header. Only `relatorios/fenotipo_hbn.txt` is purely aggregate. The whole folder is in `.gitignore`, so a normal `git push` does not carry it — but a zip, a screenshot, a Drive folder or an email attachment will.
+- **None of this is anonymization.** The pseudonymous IDs come from the providers and travel through this app untouched; nothing here hashes, salts, strips or aggregates them, and the app never had a step that claimed to.
+
+This is a description of what the repository **does** — it is not legal advice and
+not a compliance assessment against any data-protection regime. What the
+repository actually guarantees is narrow: a loopback bind, a `.gitignore` entry, and a
+backend with exactly one write-shaped route (`POST /source-localization`, which
+computes and returns — it stores nothing and sends nothing anywhere). What it does **not** guarantee is that your use of
+these recordings is lawful where you are, that an ethics approval covers it, that
+the subject IDs in `relatorios/` are safe to share, or that anything you export
+from the screen is de-identified. Those decisions belong to you and to your ethics
+board, not to this README.
 
 ---
 
@@ -392,7 +748,10 @@ Issues and pull requests are welcome — particularly around artifact rejection,
 
 MIT — see [LICENSE](LICENSE).
 
-The dataset is **not** covered by this license; it carries its own terms from IEEE DataPort.
+The datasets are **not** covered by it. **Both** banks carry their own terms, and
+they are not the same terms: HBN-EEG `ds005505` is CC-BY-SA 4.0 and requires the
+two citations named above, while `adhdata` comes from IEEE DataPort with no
+license stated on its page. See [Data attribution and licensing](#data-attribution-and-licensing).
 
 <div align="center">
 <br>

@@ -21,3 +21,12 @@ env/
 Thumbs.db
 .vscode/
 .idea/
+
+# Saída derivada dos scripts: regerável a qualquer momento rodando
+# inventario_hbn.py, fenotipo_hbn.py, qc_relatorio.py e figuras_limpeza.py.
+# Versionar relatório é versionar uma foto de uma execução, que envelhece
+# sem avisar e passa a contradizer o código que a produziu.
+relatorios/
+
+# Capturas de tela de verificação no navegador
+.playwright-mcp/

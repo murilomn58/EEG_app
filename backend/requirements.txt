@@ -5,3 +5,10 @@ numpy
 pandas
 pytest
 httpx
+
+# Abaixo: estavam INSTALADAS e nao declaradas. Quem clonasse o repositorio
+# instalava o de cima e nao conseguia rodar o experimento de vazamento nem
+# gerar a figura — e o erro so apareceria no import, longe da causa.
+scipy>=1.11
+scikit-learn>=1.3
+matplotlib>=3.7
