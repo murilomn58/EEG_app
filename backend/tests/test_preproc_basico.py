@@ -8,7 +8,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from preproc_basico import (
     PISO_AC_UV,
+    aplicar_base,
     aplicar_car,
+    bases_disponiveis,
+    diagnosticar_referencia_fisica,
     aplicar_passa_baixa,
     aplicar_notch,
     aplicar_passa_alta,
@@ -458,3 +461,171 @@ def test_preprocessar_completo_zera_media_instantanea():
     raw = _raw_sintetico(fs=500.0, f_rede=60.0)
     filtrado, _ = preprocessar(raw, h_freq=45.0, car=True)
     assert _media_instantanea_uv(filtrado) == pytest.approx(0.0, abs=1e-9)
+
+
+# --- troca de base (re-referenciamento parametrizado) -------------------
+#
+# Missao 1 da folha de 01/09/2026: "Troca de Base - ouvido". A base deixa de
+# ser decidida pelo booleano car=True/False e passa a ser NOMEADA, porque o
+# app precisa oferecer a escolha ao usuario e refazer o pre-processamento
+# conforme ela.
+
+def _raw_com_orelhas(fs=128.0, n_canais=4):
+    """Sinal com dois canais de orelha (A1/A2) alem dos de analise, que e o
+    que o adhdata tem e o HBN nao."""
+    raw = _raw_sintetico(fs=fs, n_canais=n_canais)
+    dados = raw.get_data()
+    nomes = [f"E{i + 1}" for i in range(n_canais)] + ["A1", "A2"]
+    # as orelhas carregam um offset comum, que e o que a re-referencia remove
+    orelhas = np.vstack([dados[0] * 0.1 + 30e-6, dados[0] * 0.1 + 26e-6])
+    info = mne.create_info(nomes, fs, "eeg", verbose=False)
+    return mne.io.RawArray(np.vstack([dados, orelhas]), info, verbose=False)
+
+
+def test_bases_disponiveis_lista_orelha_so_quando_a1_a2_existem():
+    """A rede GSN-HydroCel do HBN nao tem A1/A2. Oferecer 'orelha' ali seria
+    oferecer um botao que so pode falhar."""
+    com = bases_disponiveis(_raw_com_orelhas().ch_names)
+    sem = bases_disponiveis(_raw_sintetico(fs=500.0).ch_names)
+
+    assert "orelha" in com
+    assert "orelha" not in sem
+    # nativa e car nao dependem de canal nenhum: valem em qualquer banco
+    for base in ("nativa", "car"):
+        assert base in com and base in sem
+
+
+def test_aplicar_base_car_zera_a_media_instantanea():
+    raw = _raw_sintetico(fs=500.0)
+    saida, info = aplicar_base(raw, "car")
+    assert _media_instantanea_uv(saida) == pytest.approx(0.0, abs=1e-9)
+    assert info["base"] == "car"
+
+
+def test_aplicar_base_nativa_devolve_copia_intacta():
+    """'nativa' e a ausencia de re-referencia, nao uma re-referencia para a
+    referencia declarada: o sinal ja esta nela."""
+    raw = _raw_sintetico(fs=500.0)
+    saida, info = aplicar_base(raw, "nativa")
+    assert np.allclose(saida.get_data(), raw.get_data())
+    assert info["base"] == "nativa"
+
+
+def test_aplicar_base_orelha_remove_o_que_e_comum_as_orelhas():
+    raw = _raw_com_orelhas()
+    saida, info = aplicar_base(raw, "orelha")
+    assert info["canais_referencia"] == ["A1", "A2"]
+    # a media das duas orelhas, depois da re-referencia, e zero por construcao
+    dados = saida.get_data()
+    idx = [saida.ch_names.index(c) for c in ("A1", "A2")]
+    assert np.abs(dados[idx].mean(axis=0)).max() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_aplicar_base_orelha_recusa_banco_sem_orelhas():
+    """Falha declarada, e nao silenciosa: sem A1/A2 nao ha o que fazer."""
+    raw = _raw_sintetico(fs=500.0)
+    with pytest.raises(ValueError, match="orelha"):
+        aplicar_base(raw, "orelha")
+
+
+def test_aplicar_base_cz_recusa_banco_sem_cz():
+    raw = _raw_sintetico(fs=500.0)
+    with pytest.raises(ValueError, match="Cz"):
+        aplicar_base(raw, "cz")
+
+
+def test_aplicar_base_desconhecida_recusa():
+    raw = _raw_sintetico(fs=500.0)
+    with pytest.raises(ValueError, match="base desconhecida"):
+        aplicar_base(raw, "mastoide_esquerda")
+
+
+def test_aplicar_base_nao_modifica_o_original():
+    raw = _raw_sintetico(fs=500.0)
+    antes = _media_instantanea_uv(raw)
+    aplicar_base(raw, "car")
+    assert _media_instantanea_uv(raw) == pytest.approx(antes)
+
+
+def test_preprocessar_com_base_registra_a_ordem_e_a_base():
+    """A base entra na MESMA posicao que o CAR ocupava: por ultimo, depois
+    dos filtros."""
+    raw = _raw_sintetico(fs=500.0, f_rede=60.0)
+    _filtrado, decisoes = preprocessar(raw, h_freq=45.0, base="car")
+    assert decisoes["ordem"] == ["passa-alta", "passa-baixa", "notch", "car"]
+    assert decisoes["base"] == "car"
+
+
+def test_preprocessar_base_nativa_nao_acrescenta_etapa():
+    raw = _raw_sintetico(fs=500.0, f_rede=60.0)
+    _filtrado, decisoes = preprocessar(raw, base="nativa")
+    assert decisoes["ordem"] == ["passa-alta", "notch"]
+    assert decisoes["base"] == "nativa"
+
+
+def test_preprocessar_car_true_continua_funcionando():
+    """Compatibilidade: car=True e o mesmo que base='car'. O qc_relatorio e as
+    figuras do caderno chamam assim, e quebra-los para renomear um parametro
+    seria trocar trabalho entregue por estetica."""
+    raw = _raw_sintetico(fs=500.0, f_rede=60.0)
+    _f1, d1 = preprocessar(raw, h_freq=45.0, car=True)
+    _f2, d2 = preprocessar(raw, h_freq=45.0, base="car")
+    assert d1["ordem"] == d2["ordem"]
+    assert d1["base"] == d2["base"] == "car"
+    assert d1["car"] is True
+
+
+def test_preprocessar_recusa_car_e_base_em_conflito():
+    """car=True com base='nativa' e um pedido contraditorio. Escolher um lado
+    em silencio seria decidir pelo chamador."""
+    raw = _raw_sintetico(fs=500.0, f_rede=60.0)
+    with pytest.raises(ValueError, match="conflito"):
+        preprocessar(raw, car=True, base="nativa")
+
+
+# --- tratamento do Cz ---------------------------------------------------
+#
+# "θ Tratamento · Cz" na folha. O Cz do HBN e a referencia fisica: vem
+# identicamente zero no bruto e ganha sinal depois do CAR. Ate aqui isso era
+# comportamento emergente do MNE; passa a ser decisao declarada e medida.
+
+def _raw_com_cz_de_referencia(fs=500.0):
+    raw = _raw_sintetico(fs=fs, n_canais=4)
+    dados = raw.get_data()
+    dados[3] = 0.0
+    nomes = ["Fz", "Pz", "C3", "Cz"]
+    info = mne.create_info(nomes, fs, "eeg", verbose=False)
+    return mne.io.RawArray(dados, info, verbose=False)
+
+
+def test_diagnosticar_referencia_fisica_encontra_o_cz_zerado():
+    achados = diagnosticar_referencia_fisica(_raw_com_cz_de_referencia())
+    assert achados["canais_flat"] == ["Cz"]
+    assert achados["referencia_fisica_provavel"] == "Cz"
+
+
+def test_diagnosticar_referencia_fisica_nao_inventa_quando_nao_ha():
+    achados = diagnosticar_referencia_fisica(_raw_sintetico(fs=500.0))
+    assert achados["canais_flat"] == []
+    assert achados["referencia_fisica_provavel"] is None
+
+
+def test_preprocessar_declara_o_cz_recuperado_pelo_car():
+    """O numero que o caderno reporta: desvio 0,000 antes, > 0 depois."""
+    raw = _raw_com_cz_de_referencia()
+    _filtrado, decisoes = preprocessar(raw, h_freq=45.0, base="car")
+
+    cz = decisoes["referencia_fisica"]
+    assert cz["referencia_fisica_provavel"] == "Cz"
+    assert cz["recuperada_pela_base"] is True
+
+
+def test_preprocessar_nao_declara_recuperacao_quando_a_base_e_nativa():
+    """Sem re-referenciar, o Cz continua morto — e a decisao tem de dizer
+    isso, porque um Cz plano no tracado e plausivel e errado."""
+    raw = _raw_com_cz_de_referencia()
+    _filtrado, decisoes = preprocessar(raw, base="nativa")
+
+    cz = decisoes["referencia_fisica"]
+    assert cz["referencia_fisica_provavel"] == "Cz"
+    assert cz["recuperada_pela_base"] is False

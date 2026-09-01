@@ -422,7 +422,127 @@ def aplicar_car(raw):
     return saida
 
 
-def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False):
+# --- troca de base -----------------------------------------------------
+
+# Os canais de orelha, na nomenclatura que os bancos usam. A1/A2 é o padrão
+# 10-20 clássico; M1/M2 (mastoide) aparece em bancos mais recentes e é a mesma
+# ideia elétrica: um ponto perto da cabeça e longe de atividade cortical.
+CANAIS_ORELHA = ("A1", "A2", "M1", "M2")
+
+# As bases que o pipeline sabe aplicar. Vive aqui e não no wizard porque quem
+# sabe o que dá para fazer com um Raw é este módulo; a tela só pergunta.
+BASES = ("nativa", "car", "cz", "orelha")
+
+
+def bases_disponiveis(ch_names):
+    """As bases aplicáveis a um banco, dados os canais que ele tem.
+
+    Existe porque oferecer uma base impossível é oferecer um botão que só
+    pode falhar: a rede GSN-HydroCel do HBN não tem A1/A2, e o adhdata de
+    19 canais 10-20 não traz eletrodo de mastoide. 'nativa' e 'car' não
+    dependem de canal nenhum e valem em qualquer banco."""
+    nomes = {c.upper() for c in ch_names}
+    bases = ["nativa", "car"]
+    if "CZ" in nomes:
+        bases.append("cz")
+    if len([c for c in CANAIS_ORELHA if c in nomes]) >= 2:
+        bases.append("orelha")
+    return bases
+
+
+def _canais_de_orelha(ch_names):
+    """Os canais de orelha presentes, no nome exato do arquivo. Casa sem
+    diferenciar caixa porque 'A1' e 'a1' são o mesmo eletrodo, e um banco
+    novo não deve quebrar por causa disso."""
+    return [c for c in ch_names if c.upper() in CANAIS_ORELHA]
+
+
+def aplicar_base(raw, base):
+    """(raw re-referenciado, info da decisão). A base é NOMEADA, não booleana.
+
+    Existe porque a escolha da referência é do usuário, não do pipeline: o
+    mesmo registro lido contra a orelha, contra a média comum ou contra o Cz
+    responde perguntas diferentes, e nenhuma das três é "a certa". O wizard
+    oferece o que `bases_disponiveis` autoriza, e o reprocessamento passa por
+    aqui.
+
+    'nativa' é a AUSÊNCIA de re-referência, e não uma re-referência para a
+    referência declarada do banco: o sinal do arquivo já está nela, e aplicar
+    qualquer coisa seria mexer no dado para dizer que nada mudou.
+
+    Base impossível levanta ValueError em vez de cair em silêncio para a
+    nativa. Silêncio aqui produziria exatamente o defeito que o wizard existe
+    para impedir: uma tela que escreve 'orelha' sobre um traçado que continua
+    na referência de origem.
+
+    Devolve cópia, como todo o resto do módulo: set_eeg_reference age in
+    place."""
+    if base not in BASES:
+        raise ValueError(f"base desconhecida: {base} (use {', '.join(BASES)})")
+
+    info = {"base": base, "canais_referencia": []}
+
+    if base == "nativa":
+        return raw.copy(), info
+
+    if base == "car":
+        return aplicar_car(raw), info
+
+    if base == "cz":
+        alvo = next((c for c in raw.ch_names if c.upper() == "CZ"), None)
+        if alvo is None:
+            raise ValueError("base 'cz' pedida, mas não há canal Cz neste banco")
+        referencias = [alvo]
+    else:
+        referencias = _canais_de_orelha(raw.ch_names)
+        if len(referencias) < 2:
+            raise ValueError(
+                "base 'orelha' pedida, mas este banco não tem A1/A2 (nem M1/M2). "
+                f"canais de orelha encontrados: {referencias or 'nenhum'}"
+            )
+
+    saida = raw.copy()
+    saida.set_eeg_reference(referencias, projection=False, verbose=False)
+    info["canais_referencia"] = referencias
+    return saida, info
+
+
+def diagnosticar_referencia_fisica(raw, piso_uv=PISO_AC_UV):
+    """Quais canais vêm planos, e qual deles é provavelmente a referência
+    física da gravação.
+
+    Um eletrodo referenciado contra si mesmo dá exatamente zero. No HBN esse
+    eletrodo é o Cz, e ele ENTRA no conjunto de 19 canais de análise — ou
+    seja, sem tratamento ele entra morto na análise, e um Cz achatado no
+    traçado é plausível e errado.
+
+    Isto era comportamento emergente: o CAR devolvia o sinal do Cz e ninguém
+    declarava que era isso que estava acontecendo. A missão de 01/09/2026 pede
+    o tratamento explícito, então o pipeline passa a MEDIR e REPORTAR.
+
+    'provável' é literal: um canal plano também pode ser eletrodo solto ou
+    canal morto. O que a medida sustenta é que o canal não tem conteúdo AC,
+    não a razão disso."""
+    dados = raw.get_data(picks="eeg")
+    nomes = [raw.ch_names[i] for i in mne.pick_types(raw.info, eeg=True)] if dados.size else []
+    if not nomes:
+        nomes = list(raw.ch_names)
+
+    flat = [
+        nome for nome, desvio in zip(nomes, dados.std(axis=1) * 1e6)
+        if float(desvio) < piso_uv
+    ]
+
+    # entre os planos, o que tem nome de referência conhecida é o candidato:
+    # Cz no HBN, orelha nos bancos que referenciam contra ela
+    provavel = next(
+        (c for c in flat if c.upper() == "CZ" or c.upper() in CANAIS_ORELHA),
+        flat[0] if flat else None,
+    )
+    return {"canais_flat": flat, "referencia_fisica_provavel": provavel}
+
+
+def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False, base=None):
     """(raw_filtrado, decisoes). A ordem é fixa e não é arbitrária:
 
         passa-alta -> passa-baixa -> notch -> CAR
@@ -449,7 +569,24 @@ def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False):
 
     Se freq_rede não for informada, é detectada do espectro do sinal
     ORIGINAL: medir depois dos filtros também funcionaria, mas medir antes
-    deixa o número comparável com o que o relatório reporta como 'antes'."""
+    deixa o número comparável com o que o relatório reporta como 'antes'.
+
+    A BASE ocupa a mesma posição que o CAR ocupava, por último. `car=True`
+    continua valendo e significa `base='car'`: o qc_relatorio e as figuras do
+    caderno chamam assim, e quebrá-los para renomear um parâmetro seria trocar
+    trabalho entregue por estética. Pedir os dois em desacordo (car=True com
+    base='nativa') levanta ValueError, porque escolher um lado em silêncio
+    seria decidir pelo chamador."""
+    if base is None:
+        base = "car" if car else "nativa"
+    elif car and base != "car":
+        raise ValueError(
+            f"conflito entre car=True e base={base!r}: peça um ou outro"
+        )
+
+    if base not in BASES:
+        raise ValueError(f"base desconhecida: {base} (use {', '.join(BASES)})")
+
     # limita ANTES de montar as decisoes: o que o dicionario reporta tem de
     # ser o que o filtro de fato usou, nunca o que foi pedido
     h_freq_pedido = h_freq
@@ -457,8 +594,17 @@ def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False):
 
     decisoes = {
         "l_freq": l_freq, "h_freq": h_freq, "h_freq_pedido": h_freq_pedido,
-        "car": car, "freq_rede": freq_rede, "diagnostico_rede": None,
+        "car": base == "car", "base": base, "canais_referencia": [],
+        "freq_rede": freq_rede, "diagnostico_rede": None,
     }
+
+    # medido no sinal ORIGINAL: depois da re-referência o canal plano deixa de
+    # estar plano, que é justamente o efeito a reportar
+    referencia_fisica = diagnosticar_referencia_fisica(raw)
+    referencia_fisica["recuperada_pela_base"] = bool(
+        referencia_fisica["referencia_fisica_provavel"] and base != "nativa"
+    )
+    decisoes["referencia_fisica"] = referencia_fisica
 
     if freq_rede is None:
         freq_rede, diagnostico = detectar_frequencia_rede(raw)
@@ -475,9 +621,10 @@ def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False):
     saida, harmonicos = aplicar_notch(saida, freq_rede)
     ordem.append("notch")
 
-    if car:
-        saida = aplicar_car(saida)
-        ordem.append("car")
+    if base != "nativa":
+        saida, info_base = aplicar_base(saida, base)
+        decisoes["canais_referencia"] = info_base["canais_referencia"]
+        ordem.append(base)
 
     decisoes["harmonicos_notchados"] = harmonicos
     decisoes["ordem"] = ordem
