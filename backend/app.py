@@ -311,6 +311,12 @@ def get_dataset_config(dataset_id: str, subject_id: str = None):
             "referencia": {
                 "valor": meta["referencia_declarada"],
                 "origem": "declarada",
+                # o que o wizard pode OFERECER como troca de base neste banco.
+                # Sai dos canais de análise, que são os que a base referencia:
+                # 'orelha' exige A1/A2, e a malha GSN-HydroCel do HBN não tem
+                "bases_disponiveis": preproc_basico.bases_disponiveis(
+                    meta["canais_analise"]
+                ),
                 "evidencia_no_sinal": ref["evidencia"],
                 "canais_flat": ref["canais_flat"],
             },
@@ -423,7 +429,31 @@ def _h_freq_pedido(preproc):
     return H_FREQ_CLINICO_HZ if preproc == "clinico" else None
 
 
-def _preprocessar_sujeito(subject_id, canais, preproc="basico"):
+def _validar_base(base, ch_names):
+    """Recusa uma base que este banco não comporta, com a razão.
+
+    A lista do que dá para oferecer sai de preproc_basico.bases_disponiveis,
+    e não de uma segunda cópia da regra aqui: duas cópias é como elas
+    divergem, e a divergência apareceria como um botão no wizard que devolve
+    400 ao ser clicado."""
+    if base not in preproc_basico.BASES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"base inválida: {base} (use {', '.join(preproc_basico.BASES)})",
+        )
+
+    disponiveis = preproc_basico.bases_disponiveis(ch_names)
+    if base not in disponiveis:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"base '{base}' não é aplicável a este banco "
+                f"(disponíveis: {', '.join(disponiveis)})"
+            ),
+        )
+
+
+def _preprocessar_sujeito(subject_id, canais, preproc="basico", base="nativa"):
     """Filtra a gravação de um sujeito do adhdata e devolve
     (canais_filtrados, decisoes).
 
@@ -445,7 +475,7 @@ def _preprocessar_sujeito(subject_id, canais, preproc="basico"):
     raw = mne.io.RawArray(dados, info, verbose=False)
 
     filtrado, decisoes = preproc_basico.preprocessar(
-        raw, l_freq=0.5, h_freq=_h_freq_pedido(preproc)
+        raw, l_freq=0.5, h_freq=_h_freq_pedido(preproc), base=base
     )
     saida = filtrado.get_data() * 1e6  # de volta pra µV, a escala do frontend
     return {c: saida[i].tolist() for i, c in enumerate(csv_data.CANAIS_19)}, decisoes
@@ -529,7 +559,12 @@ def _amplitude_referencia(valores):
 
 
 @app.get("/raw-data")
-def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "adhdata"):
+def get_raw_data(
+    subject_id: str,
+    preproc: str = "nenhum",
+    dataset_id: str = "adhdata",
+    base: str = "nativa",
+):
     """A gravação de um sujeito, crua ou pré-processada. Os metadados da
     decisão (qual rede foi detectada, quais harmônicos saíram) viajam
     junto com o dado, para a interface poder dizer ao usuário o que foi
@@ -552,11 +587,31 @@ def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "ad
                 qc_relatorio.py mede, e por isso NÃO muda.
       clinico — o anterior mais passa-baixa (70 Hz, ou o que couber sob o
                 Nyquist). É o conjunto que um eletroencefalografista espera
-                ver num traçado de rotina."""
+                ver num traçado de rotina.
+
+    `base` é a referência contra a qual o sinal é lido: nativa (a do arquivo),
+    car, cz ou orelha. Trocá-la REFAZ o pré-processamento a partir do bruto,
+    em vez de re-referenciar o sinal já filtrado — e é por isso que ela vive
+    aqui e não no frontend. Antes desta rota o CAR que o usuário recebia era
+    um laço em JavaScript, e o CAR testado (o do MNE, que as figuras do
+    caderno usam) não era o entregue.
+
+    Base só se aplica sobre sinal pré-processado: com preproc=nenhum o
+    endpoint devolve o sinal do arquivo, e re-referenciar ali seria entregar
+    sinal tratado sob o rótulo de bruto."""
     if preproc not in ("nenhum", "basico", "clinico"):
         raise HTTPException(
             status_code=400,
             detail=f"preproc inválido: {preproc} (use nenhum, basico ou clinico)",
+        )
+
+    if preproc == "nenhum" and base != "nativa":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"base '{base}' pedida com preproc=nenhum: a troca de base exige "
+                "pré-processamento (use preproc=basico ou clinico)"
+            ),
         )
 
     meta = config.DATASETS.get(dataset_id)
@@ -564,7 +619,9 @@ def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "ad
         raise HTTPException(status_code=400, detail=f"dataset desconhecido: {dataset_id}")
 
     if meta["tipo"] != "csv":
-        return _raw_data_bids(meta, dataset_id, subject_id, preproc)
+        return _raw_data_bids(meta, dataset_id, subject_id, preproc, base)
+
+    _validar_base(base, csv_data.CANAIS_19)
 
     try:
         canais = csv_data.get_subject_raw(app.state.df, subject_id)
@@ -577,6 +634,7 @@ def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "ad
         "fs": csv_data.FS,
         "channels": canais,
         "preproc": preproc,
+        "base": base,
         "unidade": "µV",
         "amplitude_p99": _amplitude_referencia(
             np.array([canais[c] for c in csv_data.CANAIS_19], dtype=float)
@@ -585,13 +643,13 @@ def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "ad
     if preproc == "nenhum":
         return resposta
 
-    # o preproc entra na chave: basico e clinico são filtros DIFERENTES sobre o
-    # mesmo sujeito, e servir um pelo outro seria mostrar um traçado com legenda
+    # o preproc e a base entram na chave: são sinais DIFERENTES sobre o mesmo
+    # sujeito, e servir um pelo outro seria mostrar um traçado com legenda
     # errada
-    chave = (subject_id, preproc)
+    chave = (subject_id, preproc, base)
     if chave not in app.state.cache_filtrado:
         try:
-            filtrados, decisoes = _preprocessar_sujeito(subject_id, canais, preproc)
+            filtrados, decisoes = _preprocessar_sujeito(subject_id, canais, preproc, base)
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"falha no pré-processamento: {e}")
         diagnostico = decisoes["diagnostico_rede"] or {}
@@ -602,6 +660,10 @@ def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "ad
             "freq_rede_motivo": diagnostico.get("motivo"),
             "harmonicos_notchados": decisoes["harmonicos_notchados"],
             "l_freq": decisoes["l_freq"],
+            "canais_referencia": decisoes["canais_referencia"],
+            # o Cz do HBN vem plano por ser a referência física, e a tela
+            # precisa poder dizer se a base escolhida o devolveu ao traçado
+            "referencia_fisica": decisoes["referencia_fisica"],
             # o corte que FOI aplicado, não o que foi pedido: em basico é None
             # (não há passa-baixa) e em clinico no adhdata é 57,6 e não 70,
             # porque a 128 Hz o Nyquist não deixa. O pedido original fica em
@@ -621,14 +683,22 @@ def get_raw_data(subject_id: str, preproc: str = "nenhum", dataset_id: str = "ad
     return resposta
 
 
-def _raw_data_bids(meta, dataset_id, subject_id, preproc):
+def _raw_data_bids(meta, dataset_id, subject_id, preproc, base="nativa"):
     """A gravação de um banco BIDS, já reduzida ao conjunto de análise.
 
     A redução acontece AQUI, no backend, e não no frontend: é o que a tela
     de conferência dizia que faltava. Os canais saem nomeados em 10-20
     (Fz, e não E11), porque o resto do app raciocina em 10-20 — o nome do
     arquivo viaja junto, em `canais_origem`, para a tela poder mostrar de
-    qual eletrodo cada traçado veio."""
+    qual eletrodo cada traçado veio.
+
+    A BASE é aplicada sobre o sinal JÁ REDUZIDO aos canais de análise, e não
+    sobre os 129 do arquivo. É uma decisão, não um detalhe: a média comum de
+    19 canais 10-20 não é a mesma que a de 129 sensores da malha inteira, e é
+    a dos 19 que corresponde ao que o app mostra e mede. A divergência conexa
+    já está registrada — o qc_relatorio mede os 129 do arquivo enquanto o app
+    serve 19, e no sub-NDARAC904DMU isso é a diferença entre 1,52 dB (passa) e
+    6,20 dB (reprova)."""
     try:
         raw, escolhido = _raw_do_banco(meta, subject_id)
     except ValueError as e:
@@ -651,15 +721,18 @@ def _raw_data_bids(meta, dataset_id, subject_id, preproc):
 
     fs = float(raw.info["sfreq"])
 
+    # sobre os canais de ANÁLISE, que são os que a base vai referenciar
+    _validar_base(base, canais_analise)
+
     decisoes = None
     if preproc in ("basico", "clinico"):
-        # o preproc entra na chave junto com o banco e o sujeito: basico e
-        # clinico são filtros diferentes e não podem compartilhar entrada
-        chave = (dataset_id, escolhido, preproc)
+        # o preproc e a base entram na chave junto com o banco e o sujeito:
+        # são sinais diferentes e não podem compartilhar entrada
+        chave = (dataset_id, escolhido, preproc, base)
         if chave not in app.state.cache_filtrado:
             try:
                 filtrado, decisoes = preproc_basico.preprocessar(
-                    reduzido, l_freq=0.5, h_freq=_h_freq_pedido(preproc)
+                    reduzido, l_freq=0.5, h_freq=_h_freq_pedido(preproc), base=base
                 )
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"falha no pré-processamento: {e}")
@@ -682,6 +755,7 @@ def _raw_data_bids(meta, dataset_id, subject_id, preproc):
         "channels": {c: dados[i].tolist() for i, c in enumerate(canais_analise)},
         "canais_origem": resolvido,
         "preproc": preproc,
+        "base": base,
         # µV, como o ramo do CSV — a ressalva é sobre a CALIBRAÇÃO, não sobre a
         # unidade. O que a evidência sustenta: ninguém confirmou o ganho deste
         # banco contra um sinal de referência conhecido. O que ela NÃO sustenta,

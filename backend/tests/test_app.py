@@ -136,11 +136,120 @@ def test_raw_data_preproc_basico_filtra_e_informa_a_rede(client_filtravel):
     assert abs(media) < 1.0
 
 
+# --- troca de base no endpoint ------------------------------------------
+#
+# Missao 1 da folha de 01/09/2026. O wizard escolhe a base e o backend REFAZ o
+# pre-processamento; ate aqui o CAR que o usuario recebia era um laco em JS no
+# frontend, e o testado (MNE) nao era o entregue.
+
+@pytest.fixture
+def client_multicanal():
+    """Canais com sinais DIFERENTES entre si, ao contrario de _df_filtravel.
+
+    Importa: com os 19 canais identicos o CAR devolve zero em todos, por
+    construcao, e um teste de re-referencia sobre esse fixture mediria o
+    fixture em vez do codigo."""
+    fs = 128.0
+    t = np.arange(int(fs * 40)) / fs
+    linhas = []
+    for i in range(len(t)):
+        linha = {
+            c: 140.0
+            + (10.0 + j) * np.sin(2 * np.pi * 10.0 * t[i] + j)
+            + 6.0 * np.sin(2 * np.pi * 50.0 * t[i])
+            for j, c in enumerate(CANAIS_19)
+        }
+        linha["ID"] = "suj1"
+        linha["Class"] = "ADHD"
+        linhas.append(linha)
+
+    app.state.df = pd.DataFrame(linhas)
+    app.state.cache_filtrado = {}
+    return TestClient(app)
+
+
+def test_raw_data_base_default_e_nativa(client_filtravel):
+    """Sem pedir base, o comportamento nao muda: quem ja usava o endpoint
+    continua recebendo o que recebia."""
+    resp = client_filtravel.get(
+        "/raw-data", params={"subject_id": "suj1", "preproc": "basico"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["base"] == "nativa"
+
+
+def test_raw_data_base_car_zera_a_media_entre_canais(client_multicanal):
+    resp = client_multicanal.get(
+        "/raw-data",
+        params={"subject_id": "suj1", "preproc": "basico", "base": "car"},
+    )
+    assert resp.status_code == 200
+    corpo = resp.json()
+    assert corpo["base"] == "car"
+
+    amostras = np.array([corpo["channels"][c] for c in CANAIS_19])
+    assert np.abs(amostras.mean(axis=0)).max() < 1e-6
+
+
+def test_raw_data_base_invalida(client_filtravel):
+    resp = client_filtravel.get(
+        "/raw-data",
+        params={"subject_id": "suj1", "preproc": "basico", "base": "mastoide"},
+    )
+    assert resp.status_code == 400
+    assert "base inválida" in resp.json()["detail"]
+
+
+def test_raw_data_base_impossivel_no_banco(client_filtravel):
+    """O adhdata servido ao app tem os 19 canais de analise, sem A1/A2 —
+    pedir 'orelha' e um pedido que este banco nao comporta."""
+    resp = client_filtravel.get(
+        "/raw-data",
+        params={"subject_id": "suj1", "preproc": "basico", "base": "orelha"},
+    )
+    assert resp.status_code == 400
+    assert "orelha" in resp.json()["detail"]
+
+
+def test_raw_data_base_entra_na_chave_do_cache(client_multicanal):
+    """Duas bases sao sinais DIFERENTES sobre o mesmo sujeito. Servir um pelo
+    outro seria mostrar um tracado com legenda errada — o mesmo motivo pelo
+    qual o preproc ja entrava na chave."""
+    for base in ("nativa", "car"):
+        client_multicanal.get(
+            "/raw-data",
+            params={"subject_id": "suj1", "preproc": "basico", "base": base},
+        )
+    assert ("suj1", "basico", "nativa") in app.state.cache_filtrado
+    assert ("suj1", "basico", "car") in app.state.cache_filtrado
+
+
+def test_raw_data_base_sem_preproc_nao_re_referencia(client_filtravel):
+    """preproc=nenhum e o sinal do arquivo. Re-referenciar ali seria entregar
+    um sinal tratado sob o rotulo de bruto."""
+    resp = client_filtravel.get(
+        "/raw-data",
+        params={"subject_id": "suj1", "preproc": "nenhum", "base": "car"},
+    )
+    assert resp.status_code == 400
+    assert "preproc" in resp.json()["detail"]
+
+
+def test_dataset_config_lista_as_bases_disponiveis(client):
+    """O wizard so pode oferecer o que o banco comporta."""
+    resp = client.get("/dataset-config", params={"dataset_id": "adhdata"})
+    assert resp.status_code == 200
+    bases = resp.json()["detectado"]["referencia"]["bases_disponiveis"]
+    assert "nativa" in bases and "car" in bases
+    # os 19 canais de analise do adhdata nao incluem A1/A2
+    assert "orelha" not in bases
+
+
 def test_raw_data_preproc_usa_cache(client_filtravel, monkeypatch):
     """Filtrar com MNE leva segundos — sem cache, alternar bruto/filtrado
     no frontend refiltraria a gravação inteira a cada clique."""
     client_filtravel.get("/raw-data", params={"subject_id": "suj1", "preproc": "basico"})
-    assert ("suj1", "basico") in app.state.cache_filtrado
+    assert ("suj1", "basico", "nativa") in app.state.cache_filtrado
 
     def nao_deve_ser_chamado(subject_id, canais):
         raise AssertionError("refiltrou apesar do cache")
