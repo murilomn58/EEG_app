@@ -152,3 +152,91 @@ def test_decisoes_registram_as_bandas_e_a_janela():
     assert dec["fs"] == FS
     assert dec["n_caracteristicas"] == 10
     assert dec["metodo"] == "Welch/Hann, integração trapezoidal por banda"
+
+
+# ---------------------------------------------------------------------------
+# razão theta/beta (TBR) — missão 2 da folha de 01/09/2026
+#
+# A folha escreve "β/θ"; o combinado com o Murilo em 01/09 é a TBR CLÁSSICA
+# da literatura de TDAH, theta sobre beta. A ordem importa porque o número
+# tem limiar publicado (4,0) e inverter a razão o torna incomparável com
+# tudo que foi publicado.
+# ---------------------------------------------------------------------------
+
+def _epoca_mistura(amp_theta, amp_beta, n_canais=2, dur_s=4.0):
+    """Uma época com theta e beta em amplitudes conhecidas, e nada mais.
+    Como potência vai com o quadrado da amplitude, a TBR esperada é
+    (amp_theta/amp_beta)²."""
+    t = np.arange(int(dur_s * FS)) / FS
+    onda = amp_theta * np.sin(2 * np.pi * 6.0 * t) + amp_beta * np.sin(2 * np.pi * 20.0 * t)
+    return np.tile(onda, (n_canais, 1))
+
+
+def test_tbr_e_theta_sobre_beta_e_nao_o_inverso():
+    """Mais theta que beta tem de dar TBR > 1. Este teste existe porque a
+    folha manuscrita escreve a razão invertida, e implementar ao pé da letra
+    produziria um número que parece certo e é o recíproco do publicado."""
+    epocas = np.array([_epoca_mistura(amp_theta=3.0, amp_beta=1.0)])
+    tbr, nomes = caracteristicas.razao_theta_beta(epocas, FS)
+    assert nomes == ["ch0_tbr", "ch1_tbr"]
+    assert tbr[0, 0] > 1.0
+
+
+def test_tbr_bate_com_a_razao_de_potencias_conhecida():
+    """Amplitude 3 em theta contra 1 em beta é potência 9 contra 1: TBR ≈ 9.
+    A tolerância é larga porque as bandas têm bordas e o Hann espalha."""
+    epocas = np.array([_epoca_mistura(amp_theta=3.0, amp_beta=1.0)])
+    tbr, _ = caracteristicas.razao_theta_beta(epocas, FS)
+    assert tbr[0, 0] == pytest.approx(9.0, rel=0.15)
+
+
+def test_tbr_alcanca_o_limiar_classico_de_4():
+    """O defeito histórico do app foi uma TBR comprimida que NUNCA alcançava
+    o limiar clássico de 4,0, por mais theta que o sinal tivesse. Um sinal
+    construído para dar 9 tem de passar de 4 com folga."""
+    epocas = np.array([_epoca_mistura(amp_theta=3.0, amp_beta=1.0)])
+    tbr, _ = caracteristicas.razao_theta_beta(epocas, FS)
+    assert tbr[0, 0] > 4.0
+
+
+def test_dobrar_a_amplitude_de_theta_quadruplica_a_tbr():
+    """Coerência com potência: a razão é de potências, não de amplitudes."""
+    um, _ = caracteristicas.razao_theta_beta(
+        np.array([_epoca_mistura(amp_theta=1.0, amp_beta=1.0)]), FS
+    )
+    dois, _ = caracteristicas.razao_theta_beta(
+        np.array([_epoca_mistura(amp_theta=2.0, amp_beta=1.0)]), FS
+    )
+    assert dois[0, 0] / um[0, 0] == pytest.approx(4.0, rel=0.15)
+
+
+def test_tbr_com_beta_nulo_nao_devolve_inf():
+    """Divisão por zero em canal sem beta. NaN e não inf: inf sobrevive a
+    comparações e contamina média e limiar em silêncio, enquanto NaN é
+    detectável e propaga como ausência."""
+    t = np.arange(int(4.0 * FS)) / FS
+    so_theta = np.tile(np.sin(2 * np.pi * 6.0 * t) * 0.0, (2, 1))
+    tbr, _ = caracteristicas.razao_theta_beta(np.array([so_theta]), FS)
+    assert np.isnan(tbr[0, 0])
+
+
+def test_tbr_reaproveita_a_potencia_de_banda():
+    """A TBR sai das MESMAS potências que potencia_de_banda devolve, e não de
+    uma segunda PSD. Duas PSDs no mesmo projeto é como elas divergem."""
+    epocas = np.array([_epoca_mistura(amp_theta=3.0, amp_beta=1.0)])
+    X, nomes = caracteristicas.potencia_de_banda(epocas, FS)
+    tbr, _ = caracteristicas.razao_theta_beta(epocas, FS)
+
+    esperado = X[0, nomes.index("ch0_theta")] / X[0, nomes.index("ch0_beta")]
+    assert tbr[0, 0] == pytest.approx(esperado)
+
+
+def test_tbr_decisoes_declaram_a_orientacao_da_razao():
+    """A decisão diz, por escrito, qual banda está no numerador: é o campo
+    que impede a razão de ser invertida numa leitura futura."""
+    epocas = np.array([_epoca_mistura(amp_theta=2.0, amp_beta=1.0)])
+    _tbr, _nomes, dec = caracteristicas.razao_theta_beta(epocas, FS, com_decisoes=True)
+    assert dec["numerador"] == "theta"
+    assert dec["denominador"] == "beta"
+    assert dec["bandas"]["theta"] == caracteristicas.BANDAS["theta"]
+    assert dec["bandas"]["beta"] == caracteristicas.BANDAS["beta"]

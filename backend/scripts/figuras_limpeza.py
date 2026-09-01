@@ -219,8 +219,27 @@ def _trecho(raw, nomes):
     return t, dados
 
 
-def _espectro(raw, nomes, janela_s=8.0, fmin=0.5, n_janelas=4):
-    """(freqs, PSD em dB) dos canais pedidos, por Welch.
+def _espectro(raw, nomes, janela_s=8.0, fmin=0.5, n_janelas=4, escala="db"):
+    """(freqs, PSD) dos canais pedidos, por Welch.
+
+    `escala` decide a unidade da saída, e a escolha é do chamador:
+
+      "db"     — 10·log10(PSD), a escala das figuras do caderno de 26/08.
+      "linear" — µV²/Hz, a PSD como Welch a devolve, sem logaritmo.
+
+    A escala linear entrou por pedido da orientadora em 01/09/2026 ("deixar
+    linear", "trocar dB p/ FFT pura"). O default continua em dB porque as
+    figuras do caderno JÁ ENTREGUE são desenhadas nele, com faixa e limites
+    de eixo calibrados em dB: trocar o default reescreveria um entregável
+    aprovado para atender um pedido que é sobre o que vem depois dele.
+
+    Por que a escolha existe em vez de uma resposta só. O logaritmo comprime
+    a dinâmica, e é isso que faz o pico de rede a +43 dB caber no mesmo eixo
+    que o alfa — útil para VER o que o notch removeu. Mas potência de banda,
+    razão entre bandas e ajuste do componente aperiódico são contas sobre a
+    potência, e fazê-las sobre dB é fazê-las sobre o logaritmo dela: a média
+    de dB é a média geométrica da potência, não a aritmética. Para a extração
+    de features que vem a seguir (missão 2, TBR θ/β), é a linear que vale.
 
     Welch e não periodograma cru: o periodograma de uma janela só é
     ruidoso e, pior, produzia um número em dB que não era comparável com
@@ -246,6 +265,10 @@ def _espectro(raw, nomes, janela_s=8.0, fmin=0.5, n_janelas=4):
     psd, freqs = mne.time_frequency.psd_array_welch(
         dados, sfreq=fs, fmin=fmin, fmax=fs / 2 * 0.9, n_fft=n_fft, verbose=False
     )
+    if escala == "linear":
+        return freqs, psd
+    if escala != "db":
+        raise ValueError(f"escala desconhecida: {escala} (use db ou linear)")
     return freqs, 10 * np.log10(psd + 1e-20)
 
 

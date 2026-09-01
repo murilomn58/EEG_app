@@ -118,3 +118,73 @@ def potencia_de_banda(epocas, fs, nomes_canais=None, com_decisoes=False):
         "n_caracteristicas": int(n_canais * len(BANDAS)),
         "resolucao_hz": float(freqs[1] - freqs[0]) if len(freqs) > 1 else None,
     }
+
+
+def razao_theta_beta(epocas, fs, nomes_canais=None, com_decisoes=False):
+    """(TBR, nomes) ou (TBR, nomes, decisoes). Uma coluna por canal.
+
+    A razão theta/beta é o marcador espectral mais publicado em TDAH, e a
+    primeira característica que a orientadora pediu (folha de 01/09/2026).
+
+    A ORIENTAÇÃO DA RAZÃO É THETA SOBRE BETA, e isto é uma decisão, não uma
+    transcrição. A folha manuscrita escreve "β/θ"; o combinado, confirmado na
+    mesma data, é a TBR clássica. A diferença não é cosmética: a literatura
+    reporta um limiar de 4,0, e o recíproco de uma razão de 9 é 0,11 — um
+    número que parece perfeitamente apresentável e não é comparável com nada
+    do que foi publicado. Por isso a decisão devolve `numerador` e
+    `denominador` por escrito.
+
+    Sai das MESMAS potências que `potencia_de_banda` calcula, e não de uma
+    PSD própria: uma segunda estimativa espectral no mesmo projeto é como as
+    duas divergem, e foi assim que a TBR do frontend passou a seguir
+    `TBR_app = 1,396 × TBR_real^0,341` sem que nada denunciasse.
+
+    Beta nulo devolve NaN, não infinito. Infinito sobrevive a comparação com
+    limiar e contamina média em silêncio; NaN é detectável e propaga como
+    ausência, que é o que um canal sem beta de fato é.
+
+    O QUE ESTE NÚMERO NÃO É. A TBR é literatura contestada: o tamanho de
+    efeito cai com o ano de publicação, há parecer negativo de sociedade
+    médica contra o uso diagnóstico, e reanálise multiverso mostra que boa
+    parte do efeito é explicável por variação no componente aperiódico e na
+    frequência individual de alfa, não por mecanismo do transtorno. Ela entra
+    aqui como primeira característica e linha de base a bater, não como
+    marcador em que o projeto aposta."""
+    X, nomes_bandas, decisoes = potencia_de_banda(
+        epocas, fs, nomes_canais=nomes_canais, com_decisoes=True
+    )
+
+    n_epocas = X.shape[0]
+    n_canais = decisoes["n_canais"]
+    canais = nomes_canais or [f"ch{i}" for i in range(n_canais)]
+
+    idx_theta = [nomes_bandas.index(f"{c}_theta") for c in canais]
+    idx_beta = [nomes_bandas.index(f"{c}_beta") for c in canais]
+
+    theta = X[:, idx_theta]
+    beta = X[:, idx_beta]
+
+    tbr = np.full((n_epocas, n_canais), np.nan, dtype=float)
+    np.divide(theta, beta, out=tbr, where=beta > 0)
+
+    nomes = [f"{c}_tbr" for c in canais]
+    if not com_decisoes:
+        return tbr, nomes
+
+    return tbr, nomes, {
+        "metodo": "razão de potências de banda (Welch/Hann, integração trapezoidal)",
+        "numerador": "theta",
+        "denominador": "beta",
+        "bandas": {"theta": BANDAS["theta"], "beta": BANDAS["beta"]},
+        "unidade": "adimensional",
+        "limiar_classico": 4.0,
+        "fs": float(fs),
+        "n_epocas": int(n_epocas),
+        "n_canais": int(n_canais),
+        "n_caracteristicas": int(n_canais),
+        "ressalva": (
+            "literatura contestada: efeito declinante com o ano de publicação, "
+            "parecer negativo para uso diagnóstico e reanálise multiverso "
+            "atribuindo o efeito ao componente aperiódico e à IAF"
+        ),
+    }
