@@ -480,12 +480,18 @@ def aplicar_base(raw, base):
     if base not in BASES:
         raise ValueError(f"base desconhecida: {base} (use {', '.join(BASES)})")
 
-    info = {"base": base, "canais_referencia": []}
+    # referencia_sem_efeito nasce False e só vira True adiante, se o canal de
+    # referência escolhido for identicamente zero. Nasce aqui, e não em cada
+    # ramo, porque uma chave que existe em três dos quatro caminhos é um
+    # KeyError esperando o quarto.
+    info = {"base": base, "canais_referencia": [], "referencia_sem_efeito": False}
 
     if base == "nativa":
         return raw.copy(), info
 
     if base == "car":
+        # o CAR não tem canal de referência: a referência é a média de todos.
+        # Ele não pode ser um no-op silencioso do jeito que 'cz' pode
         return aplicar_car(raw), info
 
     if base == "cz":
@@ -504,6 +510,15 @@ def aplicar_base(raw, base):
     saida = raw.copy()
     saida.set_eeg_reference(referencias, projection=False, verbose=False)
     info["canais_referencia"] = referencias
+
+    # Re-referenciar para um canal IDENTICAMENTE ZERO é subtrair zero de todo
+    # mundo: nada muda, e nada no MNE avisa. É um caso que este app atinge de
+    # verdade — no HBN o Cz é a referência física e vem zerado no bruto, e é
+    # justamente o HBN que oferece a base 'cz'. Sem esta marca, a tela
+    # escreveria "referência: Cz" sobre um traçado idêntico ao da base nativa.
+    dados_ref = raw.get_data(picks=[raw.ch_names.index(c) for c in referencias])
+    info["referencia_sem_efeito"] = bool(np.max(np.abs(dados_ref)) == 0.0)
+
     return saida, info
 
 
@@ -523,13 +538,27 @@ def diagnosticar_referencia_fisica(raw, piso_uv=PISO_AC_UV):
     'provável' é literal: um canal plano também pode ser eletrodo solto ou
     canal morto. O que a medida sustenta é que o canal não tem conteúdo AC,
     não a razão disso."""
-    dados = raw.get_data(picks="eeg")
-    nomes = [raw.ch_names[i] for i in mne.pick_types(raw.info, eeg=True)] if dados.size else []
-    if not nomes:
-        nomes = list(raw.ch_names)
+    # UMA fonte para nomes e dados. A versão anterior usava
+    # mne.pick_types(raw.info, eeg=True) para os nomes e get_data(picks="eeg")
+    # para os dados, e os dois DIVERGEM: pick_types exclui `info["bads"]` por
+    # default, get_data não. Com um canal marcado como bad o zip truncava e
+    # deslocava o pareamento, reportando o nome ERRADO como referência física
+    # — medido: com Fz marcado bad e Cz plano, a função devolvia "Pz".
+    # Leitores do MNE preenchem info["bads"] a partir do arquivo, então o
+    # caminho do HBN alcança este caso.
+    #
+    # exclude=[] mantém os bads: um canal marcado como ruim continua sendo um
+    # canal cujo desvio interessa medir. Quem decide o que fazer com ele é
+    # quem lê o diagnóstico, não o diagnóstico.
+    picks = mne.pick_types(raw.info, eeg=True, exclude=[])
+    if len(picks) == 0:
+        picks = np.arange(len(raw.ch_names))
+
+    dados = raw.get_data(picks=picks)
+    nomes = [raw.ch_names[i] for i in picks]
 
     flat = [
-        nome for nome, desvio in zip(nomes, dados.std(axis=1) * 1e6)
+        nome for nome, desvio in zip(nomes, dados.std(axis=1) * 1e6, strict=True)
         if float(desvio) < piso_uv
     ]
 
@@ -599,11 +628,9 @@ def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False, base=N
     }
 
     # medido no sinal ORIGINAL: depois da re-referência o canal plano deixa de
-    # estar plano, que é justamente o efeito a reportar
+    # estar plano, que é justamente o efeito a reportar. Se ele foi de fato
+    # recuperado, só se sabe MEDINDO a saída — ver o fim desta função.
     referencia_fisica = diagnosticar_referencia_fisica(raw)
-    referencia_fisica["recuperada_pela_base"] = bool(
-        referencia_fisica["referencia_fisica_provavel"] and base != "nativa"
-    )
     decisoes["referencia_fisica"] = referencia_fisica
 
     if freq_rede is None:
@@ -624,7 +651,27 @@ def preprocessar(raw, l_freq=0.5, h_freq=None, freq_rede=None, car=False, base=N
     if base != "nativa":
         saida, info_base = aplicar_base(saida, base)
         decisoes["canais_referencia"] = info_base["canais_referencia"]
+        decisoes["referencia_sem_efeito"] = info_base["referencia_sem_efeito"]
         ordem.append(base)
+    else:
+        decisoes["referencia_sem_efeito"] = False
+
+    # MEDIDO na saída, e não deduzido de "a base não é nativa". A dedução era
+    # falsa num caso que o app atinge: com base='cz' sobre o HBN, o Cz é a
+    # própria referência e continua zerado depois de re-referenciado contra si
+    # mesmo — a decisão afirmava recuperação enquanto o traçado seguia morto.
+    # Afirmar sem medir é exatamente o defeito que este pipeline existe para
+    # não cometer.
+    canal = referencia_fisica["referencia_fisica_provavel"]
+    if canal is not None and canal in saida.ch_names:
+        desvio_uv = float(
+            saida.get_data(picks=[saida.ch_names.index(canal)]).std() * 1e6
+        )
+        referencia_fisica["desvio_apos_base_uv"] = desvio_uv
+        referencia_fisica["recuperada_pela_base"] = desvio_uv >= PISO_AC_UV
+    else:
+        referencia_fisica["desvio_apos_base_uv"] = None
+        referencia_fisica["recuperada_pela_base"] = False
 
     decisoes["harmonicos_notchados"] = harmonicos
     decisoes["ordem"] = ordem

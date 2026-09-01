@@ -629,3 +629,78 @@ def test_preprocessar_nao_declara_recuperacao_quando_a_base_e_nativa():
     cz = decisoes["referencia_fisica"]
     assert cz["referencia_fisica_provavel"] == "Cz"
     assert cz["recuperada_pela_base"] is False
+
+
+def test_base_cz_sobre_cz_zerado_nao_declara_recuperacao():
+    """REGRESSAO. O caso real do HBN: o Cz e a referencia fisica e vem
+    identicamente zero, e e justamente o HBN que oferece a base 'cz'.
+    Re-referenciar um canal contra si mesmo subtrai zero de todo mundo — nada
+    muda, e o MNE nao avisa.
+
+    A primeira versao deduzia a recuperacao de 'a base nao e nativa' e
+    afirmava True aqui, enquanto o Cz medido seguia com desvio 0,000. Uma
+    tela escrevendo 'Cz recuperado' sobre um tracado morto e exatamente o
+    tipo de erro plausivel-e-invisivel que este pipeline existe para nao
+    cometer."""
+    raw = _raw_com_cz_de_referencia()
+    filtrado, decisoes = preprocessar(raw, h_freq=45.0, base="cz")
+
+    cz = decisoes["referencia_fisica"]
+    desvio = filtrado.get_data()[filtrado.ch_names.index("Cz")].std() * 1e6
+
+    assert desvio == pytest.approx(0.0, abs=1e-9), "o Cz continua morto, por construcao"
+    assert cz["recuperada_pela_base"] is False, "afirmar recuperacao aqui e mentir"
+    assert decisoes["referencia_sem_efeito"] is True
+
+
+def test_base_car_recupera_o_cz_e_a_decisao_mede_isso():
+    """O contraste do teste acima: o CAR recupera de verdade, e a decisao
+    carrega o desvio MEDIDO, nao um booleano deduzido."""
+    raw = _raw_com_cz_de_referencia()
+    _filtrado, decisoes = preprocessar(raw, h_freq=45.0, base="car")
+
+    cz = decisoes["referencia_fisica"]
+    assert cz["recuperada_pela_base"] is True
+    assert cz["desvio_apos_base_uv"] > PISO_AC_UV
+    assert decisoes["referencia_sem_efeito"] is False
+
+
+def test_base_com_referencia_viva_nao_e_marcada_sem_efeito():
+    """`referencia_sem_efeito` marca canal de referencia ZERADO, e nao
+    qualquer uso de base nomeada."""
+    raw = _raw_com_orelhas()
+    _saida, info = aplicar_base(raw, "orelha")
+    assert info["referencia_sem_efeito"] is False
+
+
+def test_diagnostico_nao_se_desalinha_com_canal_marcado_bad():
+    """REGRESSAO. `mne.pick_types` exclui info["bads"] por default e
+    `get_data(picks="eeg")` NAO exclui. Usar um para os nomes e o outro para
+    os dados truncava o zip e deslocava o pareamento: com Fz marcado bad e Cz
+    plano, a funcao devolvia "Pz" como referencia fisica. Nome errado, em
+    silencio, num caminho que o HBN alcanca — leitores do MNE preenchem
+    info["bads"] a partir do arquivo."""
+    raw = _raw_com_cz_de_referencia()
+    raw.info["bads"] = ["Fz"]
+
+    achados = diagnosticar_referencia_fisica(raw)
+    assert achados["canais_flat"] == ["Cz"]
+    assert achados["referencia_fisica_provavel"] == "Cz"
+
+
+def test_diagnostico_ignora_canais_nao_eeg():
+    """O diagnostico casa nomes com dados: `get_data(picks='eeg')` devolve so
+    as linhas de EEG, e a lista de nomes tem de ser filtrada igual. Um EOG
+    zerado no meio da montagem nao pode ser confundido com a referencia
+    fisica, nem deslocar o pareamento nome-linha."""
+    raw = _raw_com_cz_de_referencia()
+    dados = np.vstack([raw.get_data(), np.zeros((1, raw.n_times))])
+    info = mne.create_info(
+        ["Fz", "Pz", "C3", "Cz", "EOG1"], raw.info["sfreq"],
+        ["eeg", "eeg", "eeg", "eeg", "eog"], verbose=False,
+    )
+    com_eog = mne.io.RawArray(dados, info, verbose=False)
+
+    achados = diagnosticar_referencia_fisica(com_eog)
+    assert achados["canais_flat"] == ["Cz"], "o EOG zerado nao e canal de EEG plano"
+    assert achados["referencia_fisica_provavel"] == "Cz"

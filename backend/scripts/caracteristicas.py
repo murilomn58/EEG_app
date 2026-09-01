@@ -89,6 +89,22 @@ def potencia_de_banda(epocas, fs, nomes_canais=None, com_decisoes=False):
             f"{len(nomes_canais)} nomes para {n_canais} canais"
         )
 
+    # Nome de canal repetido é recusado, e não tolerado. Os nomes viram as
+    # colunas da matriz, e quem consome a matriz localiza a coluna pelo nome
+    # (`nomes.index(f"{c}_theta")`, na razão theta/beta). `list.index` devolve
+    # sempre a PRIMEIRA ocorrência: com dois canais homônimos, o segundo
+    # receberia silenciosamente as características do primeiro. Medido num
+    # caso construído: erro de fator 625 na TBR do canal duplicado, sem nada
+    # na saída denunciando. Os 19 canais 10-20 de hoje são únicos, então isto
+    # é uma armadilha para o próximo banco, não uma falha atual.
+    repetidos = sorted({c for c in nomes_canais if nomes_canais.count(c) > 1})
+    if repetidos:
+        raise ValueError(
+            f"nomes de canal repetidos: {', '.join(repetidos)}. Cada canal vira "
+            f"uma coluna identificada pelo nome, e a coluna de um homônimo é "
+            f"inalcançável"
+        )
+
     fmax = min(fs / 2.0, max(hi for _, hi in BANDAS.values()) + 5.0)
     psd, freqs = psd_array_welch(
         epocas, sfreq=fs, fmin=0.0, fmax=fmax,

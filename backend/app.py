@@ -664,6 +664,10 @@ def get_raw_data(
             # o Cz do HBN vem plano por ser a referência física, e a tela
             # precisa poder dizer se a base escolhida o devolveu ao traçado
             "referencia_fisica": decisoes["referencia_fisica"],
+            # base pedida que não mudou nada (re-referenciar contra um canal
+            # zerado). A tela tem de poder avisar em vez de escrever o nome da
+            # base sobre um traçado idêntico ao anterior
+            "referencia_sem_efeito": decisoes["referencia_sem_efeito"],
             # o corte que FOI aplicado, não o que foi pedido: em basico é None
             # (não há passa-baixa) e em clinico no adhdata é 57,6 e não 70,
             # porque a 128 Hz o Nyquist não deixa. O pedido original fica em
@@ -776,6 +780,12 @@ def _raw_data_bids(meta, dataset_id, subject_id, preproc, base="nativa"):
             "l_freq": decisoes["l_freq"],
             # o corte aplicado de verdade; None quando não houve passa-baixa
             "h_freq": decisoes["h_freq"],
+            "canais_referencia": decisoes["canais_referencia"],
+            # é AQUI que o caso do Cz do HBN acontece: base='cz' sobre o banco
+            # cujo Cz é a referência física não muda nada, e a tela precisa
+            # saber disso para não anunciar uma troca que não houve
+            "referencia_fisica": decisoes["referencia_fisica"],
+            "referencia_sem_efeito": decisoes["referencia_sem_efeito"],
         })
     return resposta
 

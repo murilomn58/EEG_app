@@ -231,6 +231,30 @@ def test_tbr_reaproveita_a_potencia_de_banda():
     assert tbr[0, 0] == pytest.approx(esperado)
 
 
+def test_nomes_de_canal_repetidos_sao_recusados():
+    """REGRESSAO. Os nomes viram colunas e a busca é por nome; `list.index`
+    devolve a primeira ocorrência, então o segundo canal homônimo receberia
+    em silêncio as características do primeiro. Medido num caso construído:
+    fator 625 de erro na TBR, sem nada denunciar na saída."""
+    epocas = np.array([_epoca_mistura(amp_theta=3.0, amp_beta=1.0, n_canais=2)])
+    with pytest.raises(ValueError, match="repetidos"):
+        caracteristicas.potencia_de_banda(epocas, FS, nomes_canais=["A", "A"])
+
+    with pytest.raises(ValueError, match="repetidos"):
+        caracteristicas.razao_theta_beta(epocas, FS, nomes_canais=["A", "A"])
+
+
+def test_nome_de_canal_com_underscore_continua_valendo():
+    """O oposto do teste acima: a busca é pela string completa `f"{c}_theta"`,
+    então um canal chamado "E11_ref" não colide com nada."""
+    epocas = np.array([_epoca_mistura(amp_theta=3.0, amp_beta=1.0, n_canais=2)])
+    tbr, nomes = caracteristicas.razao_theta_beta(
+        epocas, FS, nomes_canais=["E11_ref", "E62"]
+    )
+    assert nomes == ["E11_ref_tbr", "E62_tbr"]
+    assert tbr[0, 0] == pytest.approx(9.0, rel=0.15)
+
+
 def test_tbr_decisoes_declaram_a_orientacao_da_razao():
     """A decisão diz, por escrito, qual banda está no numerador: é o campo
     que impede a razão de ser invertida numa leitura futura."""
