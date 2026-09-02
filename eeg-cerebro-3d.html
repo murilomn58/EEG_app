@@ -457,10 +457,29 @@
   }
   #wizard-cabecalho h1 { margin: 0; font-size: 19px; font-weight: 600; color: #eef3fb; }
   #wizard-passos {
-    display: flex; gap: 14px; list-style: none; margin: 10px 0 0; padding: 0;
+    /* wrap, e não uma linha só: com 5 passos mais o resumo de cada um, a
+       trilha estourava 375px e o passo 5 ficava cortado na borda, sem scroll
+       para alcançá-lo — justamente o passo que precisa ser clicável */
+    display: flex; flex-wrap: wrap; gap: 6px 14px; list-style: none;
+    margin: 10px 0 0; padding: 0;
     font-size: 11px; color: var(--ink-dim);
   }
   #wizard-passos li.ativo { color: #eef3fb; font-weight: 600; }
+  /* Passo já visitado é clicável, para conferir o que foi escolhido sem
+     perder o caminho andado. O que ainda não foi visitado não é: pular
+     adiante burlaria as validações de atualizarAcoesWizard (banco
+     incompatível, análise sem canal nenhum). */
+  #wizard-passos li.visitado {
+    cursor: pointer; text-decoration: underline;
+    text-decoration-color: rgba(154,166,191,0.35); text-underline-offset: 3px;
+  }
+  #wizard-passos li.visitado:hover { color: #eef3fb; text-decoration-color: rgba(154,166,191,0.8); }
+  #wizard-passos li.visitado:focus-visible { outline: 1px solid rgba(154,166,191,0.7); outline-offset: 2px; }
+  /* o resumo do que foi escolhido, ao lado do número do passo */
+  #wizard-passos li .resumo-passo {
+    display: block; font-weight: 400; font-size: 10px; color: var(--ink-dim);
+    max-width: 15ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .wizard-passo { display: none; }
   .wizard-passo.ativo { display: block; }
   .wizard-ajuda { margin: 0 0 12px; font-size: 11.5px; color: var(--ink-dim); line-height: 1.5; }
@@ -552,8 +571,12 @@
     <div id="cabecalho-tracos">
       <h1>19 canais — montagem 10-20</h1>
       <p>substituível: veja <code>window.setEEGData(...)</code> no fim do script</p>
+      <!-- O rótulo do botão "nativa" é preenchido por rotularBotoesReferencia()
+           com a referência que o BANCO declara. Escrito fixo como "Nativa
+           A1/A2", ele mentia no HBN (cuja nativa é Cz) logo acima de um
+           parágrafo dizendo "este banco declara Cz". -->
       <div id="referencia">
-        <button data-ref="nativa" class="ativo">Nativa A1/A2</button>
+        <button data-ref="nativa" class="ativo">Nativa</button>
         <button data-ref="cz">Cz</button>
         <button data-ref="average">Average</button>
       </div>
@@ -774,12 +797,15 @@
   <div id="wizard-caixa">
     <header id="wizard-cabecalho">
       <h1>Configurar a sessão</h1>
+      <!-- Os passos já visitados são clicáveis e mostram, embaixo, o que foi
+           escolhido neles — dá para voltar e conferir sem refazer o caminho.
+           O resumo é preenchido por atualizarTrilhaWizard(). -->
       <ol id="wizard-passos">
-        <li data-passo="banco" class="ativo">1 · Banco</li>
-        <li data-passo="deteccao">2 · Conferência</li>
-        <li data-passo="eletrodos">3 · Eletrodos</li>
-        <li data-passo="eventos">4 · Eventos</li>
-        <li data-passo="tratamento">5 · Tratamento</li>
+        <li data-passo="banco" class="ativo">1 · Banco<span class="resumo-passo"></span></li>
+        <li data-passo="deteccao">2 · Conferência<span class="resumo-passo"></span></li>
+        <li data-passo="eletrodos">3 · Eletrodos<span class="resumo-passo"></span></li>
+        <li data-passo="eventos">4 · Eventos<span class="resumo-passo"></span></li>
+        <li data-passo="tratamento">5 · Tratamento<span class="resumo-passo"></span></li>
       </ol>
     </header>
 
@@ -3939,14 +3965,59 @@ document.getElementById("fontes-rodar").addEventListener("click", () => {
 
 const referenciaTextoEl = document.getElementById("referencia-texto");
 
+// As bases que o BANCO comporta, medidas pelo backend e entregues em
+// /dataset-config (detectado.referencia.bases_disponiveis). Nomes do backend:
+// "nativa", "car", "cz", "orelha". Aqui a média comum se chama "average", por
+// herança do frontend, então a tradução acontece na hora de comparar.
+//
+// Existe para a tela não oferecer o que o backend recusaria: a malha
+// GSN-HydroCel do HBN não tem A1/A2, e um botão que só pode dar erro é pior
+// que botão nenhum. Null significa "ainda não medido" — antes do wizard
+// responder, nada é desabilitado.
+let basesDisponiveis = null;
+const _BASE_BACKEND = { nativa: "nativa", average: "car", cz: "cz" };
+
+function baseSuportada(valor) {
+  if (!basesDisponiveis) return true;
+  return basesDisponiveis.includes(_BASE_BACKEND[valor] || valor);
+}
+
+// O rótulo do botão "nativa" diz QUAL é a nativa deste banco, em vez do
+// "A1/A2" fixo que vinha de quando só existia o adhdata. O rótulo de canal já
+// tinha sido corrigido assim; o botão tinha ficado para trás, e mentia no HBN.
+function rotularBotoesReferencia() {
+  const btn = document.querySelector('#referencia button[data-ref="nativa"]');
+  if (!btn) return;
+  const sigla = _refCurta(referenciaDeclarada);
+  btn.textContent = sigla ? `Nativa ${sigla}` : "Nativa";
+
+  // desabilita o que este banco não comporta, com o motivo no title
+  document.querySelectorAll("#referencia button[data-ref]").forEach((b) => {
+    const ok = baseSuportada(b.dataset.ref);
+    b.disabled = !ok;
+    b.title = ok ? "" : "este banco não tem os eletrodos que esta referência exige";
+  });
+}
+
 // Só a UI: marca o botão e o texto, sem mexer no sinal. É o que a popup
 // chama ao receber o eco da principal.
 function aplicarReferenciaUI(valor) {
   referenciaAtiva = valor;
   document.querySelectorAll("#referencia button").forEach((b) => b.classList.toggle("ativo", b.dataset.ref === valor));
-  referenciaTextoEl.textContent = (valor === "nativa" && referenciaDeclarada)
+  rotularBotoesReferencia();
+
+  let texto = (valor === "nativa" && referenciaDeclarada)
     ? `Referência: nativa do dataset — este banco declara ${referenciaDeclarada}; sem transformação aplicada.`
     : TEXTOS_REFERENCIA[valor];
+
+  // O AVISO QUE FALTAVA. Re-referenciar para um canal que já é a referência
+  // física subtrai zero de todos: nada muda no traçado. É o caso do Cz no
+  // HBN, e sem este aviso a tela anunciaria uma troca que não aconteceu.
+  if (valor === "cz" && _refCurta(referenciaDeclarada) === "Cz") {
+    texto += " ATENÇÃO: este banco JÁ é referenciado em Cz, então esta opção não"
+      + " muda o sinal — o Cz continua em 0 µV. Para devolver sinal ao Cz, use Average.";
+  }
+  referenciaTextoEl.textContent = texto;
 }
 // Aplica de verdade: quem roda passoSinal é só a principal, então é aqui
 // que a troca de referência passa a valer para o sinal.
@@ -5545,6 +5616,79 @@ function salvarSetup(setup) {
   try { localStorage.setItem(SETUP_CHAVE, JSON.stringify(setup)); } catch (e) { /* sem persistência, segue */ }
 }
 
+// Os passos por onde o usuário já passou. Só eles são clicáveis: voltar para
+// conferir é sempre seguro, mas pular adiante driblaria as validações de
+// atualizarAcoesWizard — banco incompatível, análise sem canal nenhum.
+const passosVisitados = new Set(["banco"]);
+
+// O que foi escolhido em cada passo, em uma linha. É o que permite conferir a
+// configuração inteira de relance, sem entrar passo a passo.
+function resumoDoPasso(passo) {
+  const d = setupEscolhido.deteccao;
+  if (passo === "banco") {
+    if (!setupEscolhido.bancoId) return "";
+    // o nome sai do próprio cartão já renderizado, e não de uma segunda lista
+    // guardada em paralelo: duas cópias da mesma verdade é como elas divergem
+    const cartao = wizardBancosEl.querySelector(
+      `.wizard-banco[data-banco="${setupEscolhido.bancoId}"] b`
+    );
+    return cartao ? cartao.textContent : setupEscolhido.bancoId;
+  }
+  if (passo === "deteccao") {
+    if (!d || !d.detectado) return "";
+    const fs = d.detectado.fs_hz, rede = d.detectado.freq_rede_hz;
+    return `${fs ? fs + " Hz" : "?"} · ${rede ? rede + " Hz rede" : "sem rede"}`;
+  }
+  if (passo === "eletrodos") {
+    if (!selecaoAnalise) return "";
+    return `${selecaoAnalise.size} canais`;
+  }
+  if (passo === "eventos") {
+    if (!Array.isArray(marcadoresDaTarefa)) return "";
+    return marcadoresDaTarefa.length ? `${marcadoresDaTarefa.length} eventos` : "sem eventos";
+  }
+  if (passo === "tratamento") {
+    const t = TRATAMENTOS[setupEscolhido.tratamento];
+    return t ? t.rotulo : "";
+  }
+  return "";
+}
+
+function atualizarTrilhaWizard() {
+  document.querySelectorAll("#wizard-passos li").forEach((li) => {
+    const passo = li.dataset.passo;
+    const visitado = passosVisitados.has(passo) && passo !== passoWizard;
+    li.classList.toggle("visitado", visitado);
+
+    // O resumo só aparece em passo JÁ VISITADO (ou no atual). Antes ele era
+    // desenhado sempre, e o app abria com "sem eventos" e "Filtro clínico"
+    // escritos sob passos onde ninguém tinha entrado ainda — anunciando como
+    // escolha o que era só o valor inicial da variável.
+    const mostraResumo = passosVisitados.has(passo);
+    const resumo = mostraResumo ? resumoDoPasso(passo) : "";
+    const alvo = li.querySelector(".resumo-passo");
+    if (alvo) alvo.textContent = resumo;
+
+    // tabindex e role só em quem é de fato clicável: anunciar como botão algo
+    // que não responde ao clique é pior que não anunciar nada
+    if (visitado) {
+      li.setAttribute("tabindex", "0");
+      li.setAttribute("role", "button");
+    } else {
+      li.removeAttribute("tabindex");
+      li.removeAttribute("role");
+    }
+
+    // O title carrega o resumo INTEIRO, porque ele é cortado por ellipsis a
+    // 15ch na tela: gastar o tooltip com a instrução deixaria o valor
+    // truncado sem nenhuma forma de ser lido.
+    const instrucao = visitado
+      ? "voltar para conferir este passo"
+      : (passo === passoWizard ? "" : "disponível depois de passar por aqui");
+    li.title = resumo ? (instrucao ? `${resumo} — ${instrucao}` : resumo) : instrucao;
+  });
+}
+
 function irParaPassoWizard(passo) {
   // a cena 3D do passo de eletrodos é um contexto WebGL próprio; deixá-la
   // rodando fora do passo gasta GPU atrás de uma tela que ninguém vê, e o
@@ -5556,9 +5700,17 @@ function irParaPassoWizard(passo) {
   wizardVoltarEl.disabled = passo === "banco";
   wizardAvancarEl.textContent = passo === "tratamento" ? "Entrar no dashboard" : "Continuar";
   atualizarAcoesWizard();
+  passosVisitados.add(passo);
+  atualizarTrilhaWizard();
   if (passo === "deteccao") detectarConfigWizard();
   if (passo === "eletrodos") carregarEletrodosWizard();
   if (passo === "eventos") carregarEventosWizard();
+  // O texto do passo 5 depende do BANCO (o aviso de que a referência física
+  // entra em 0 µV na análise), e a seleção inicial acontece na subida do app,
+  // antes de qualquer banco ter sido medido. Sem este redesenho, quem aceita
+  // o tratamento default e clica direto em "Entrar no dashboard" nunca lê o
+  // aviso — e é justamente quem mais precisa dele.
+  if (passo === "tratamento") selecionarTratamentoWizard(setupEscolhido.tratamento);
 }
 
 // a ordem dos passos vive num lugar só: antes ela estava espalhada em dois
@@ -5902,11 +6054,37 @@ function atualizarAcoesWizard() {
   } else {
     wizardAvancarEl.disabled = false;
   }
+  // a trilha do topo mostra o que foi escolhido em cada passo, e esta função
+  // já é chamada em todo ponto onde uma escolha muda — é o lugar certo para
+  // manter o resumo em dia sem espalhar chamadas
+  atualizarTrilhaWizard();
 }
 
 function selecionarBancoWizard(id) {
+  const trocou = setupEscolhido.bancoId && setupEscolhido.bancoId !== id;
   setupEscolhido.bancoId = id;
   wizardBancosEl.querySelectorAll("button").forEach((b) => b.classList.toggle("ativo", b.dataset.banco === id));
+
+  // TROCAR DE BANCO INVALIDA TUDO QUE FOI MEDIDO DEPOIS. Sem isto, os passos
+  // seguintes continuavam anunciando as medidas do banco anterior: escolher o
+  // sintético depois do HBN deixava a trilha dizendo "500 Hz · 60 Hz rede",
+  // "19 canais", "36 eventos", e o passo 4 se autocontradizia — o painel
+  // dizendo "o sintético não tem protocolo experimental" com o rodapé dizendo
+  // "36 eventos" logo abaixo.
+  //
+  // Num app cujo contrato é "isto foi MEDIDO, não lido da documentação",
+  // exibir medida de outro banco como se fosse a atual corrói exatamente a
+  // garantia que a tela promete.
+  if (trocou) {
+    setupEscolhido.deteccao = null;
+    selecaoAnalise = null;
+    marcadoresDaTarefa = [];
+    dadosEletrodosBanco = null;
+    basesDisponiveis = null;
+    referenciaDeclarada = null;
+    for (const p of PASSOS_WIZARD) if (p !== "banco") passosVisitados.delete(p);
+  }
+
   atualizarAcoesWizard();
 }
 
@@ -6013,6 +6191,13 @@ function detectarConfigWizard() {
       // painel diria "linked-ears (A1/A2)" com o HBN, cuja nativa é Cz
       referenciaDeclarada = (cfg.detectado && cfg.detectado.referencia)
         ? cfg.detectado.referencia.valor : null;
+      // quais bases este banco comporta, medido pelo backend a partir dos
+      // canais de análise. Sem isto a tela oferece botão que só pode falhar
+      basesDisponiveis = (cfg.detectado && cfg.detectado.referencia)
+        ? cfg.detectado.referencia.bases_disponiveis || null : null;
+      // se a referência ativa não existe no banco novo, volta para a nativa
+      // em vez de ficar num estado que o banco não suporta
+      if (!baseSuportada(referenciaAtiva)) referenciaAtiva = "nativa";
       if (typeof aplicarReferenciaUI === "function") aplicarReferenciaUI(referenciaAtiva);
       renderizarDeteccao(cfg);
       atualizarAcoesWizard();
@@ -6266,6 +6451,9 @@ function chaveDeEvento(ev) {
 }
 
 function renderizarEventosWizard() {
+  // a trilha mostra a contagem de eventos; ela muda quando esta lista chega
+  // do backend, e não quando o usuário sai do passo
+  atualizarTrilhaWizard();
   if (!marcadoresDaTarefa.length) {
     wizardEventosEl.innerHTML =
       `<div class="wizard-aviso">${marcadoresMotivo || "Nenhum evento nesta gravação."}</div>`;
@@ -6359,7 +6547,27 @@ function selecionarTratamentoWizard(id) {
   if (id !== "bruto" && setupEscolhido.bancoId === "sintetico") {
     texto += " Indisponível no sinal sintético: o filtro roda no backend, sobre uma gravação.";
   }
+
+  // ORIENTAÇÃO ESPECÍFICA DO BANCO, e não uma regra geral. Quando a gravação
+  // é referenciada num eletrodo que ESTÁ entre os canais de análise, esse
+  // eletrodo vem em 0 µV — no HBN é o Cz, medido: desvio 0,0000 µV na base
+  // nativa contra 73,17 µV depois do CAR. Sem esta linha o usuário escolhe
+  // "Filtro clínico" e lê um Cz achatado a vida inteira sem saber por quê,
+  // que é achado clínico plausível e falso.
+  const nativaCurta = _refCurta(referenciaDeclarada);
+  const refEstaNosCanais = nativaCurta && CANAIS_19.some(
+    (c) => c.toUpperCase() === nativaCurta.toUpperCase()
+  );
+  if (refEstaNosCanais) {
+    texto += TRATAMENTOS[id].referencia === "average"
+      ? ` Neste banco isto também devolve sinal ao ${nativaCurta}: como a gravação é referenciada nele, ele vem em 0 µV e só a referência média o recupera.`
+      : ` ATENÇÃO neste banco: a gravação é referenciada em ${nativaCurta}, então esse canal entra na análise em 0 µV. "Clínico + referência média" é o que devolve sinal a ele.`;
+  }
+
   wizardTratamentoTextoEl.textContent = texto;
+  // o resumo na trilha tem de acompanhar a escolha na hora, e não só quando o
+  // usuário sair do passo
+  atualizarTrilhaWizard();
 }
 
 function aplicarTratamento(id) {
@@ -6414,6 +6622,24 @@ if (wizardEl) {
   wizardAvancarEl.addEventListener("click", () => {
     if (passoWizard === "tratamento") concluirWizard();
     else irParaPassoWizard(passoVizinho(+1));
+  });
+
+  // Voltar a um passo já visitado clicando no número dele, para conferir o
+  // que foi escolhido. Só os visitados respondem: pular adiante driblaria as
+  // validações de atualizarAcoesWizard (banco incompatível não passa do 2,
+  // análise sem canal nenhum não passa do 3).
+  const trilhaEl = document.getElementById("wizard-passos");
+  const irPelaTrilha = (li) => {
+    if (!li || !li.classList.contains("visitado")) return;
+    irParaPassoWizard(li.dataset.passo);
+  };
+  trilhaEl.addEventListener("click", (e) => irPelaTrilha(e.target.closest("li[data-passo]")));
+  trilhaEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const li = e.target.closest("li[data-passo]");
+    if (!li || !li.classList.contains("visitado")) return;
+    e.preventDefault();  // espaço rolaria a página
+    irPelaTrilha(li);
   });
 
   const marcarTodos = (visivel) => {
