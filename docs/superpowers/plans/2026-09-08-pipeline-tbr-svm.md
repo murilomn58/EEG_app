@@ -264,27 +264,44 @@ def test_loso_nao_vaza_sujeito():
         assert dobra["sujeito_de_teste"] not in dobra["sujeitos_de_treino"]
 
 
-def test_escala_do_sujeito_de_teste_nao_entra_no_ajuste():
-    """Um sujeito com escala 1000x não desloca a normalização dos outros.
+def test_normalizacao_ajustada_fora_da_dobra_mudaria_o_escore():
+    """O escore honesto difere do escore com normalização vazada.
 
-    Se o StandardScaler fosse ajustado fora da dobra, esse sujeito arrastaria a
-    média e o desvio de todo mundo, e os escores dos OUTROS sujeitos mudariam.
-    O teste compara os escores dos demais com e sem o intruso."""
+    A COMPARAÇÃO É ENTRE DOIS AJUSTES DOS MESMOS DADOS, e não entre dois
+    conjuntos de dados. Um teste que alterasse o dado de um sujeito e exigisse
+    que os escores dos outros não mudassem seria inválido: nas dobras dos
+    outros, aquele sujeito é dado de TREINO legítimo, e mudar o treino muda o
+    modelo. Medido em 08/09/2026: o escore de um sujeito ia de -0,82 para
+    +1,00 quando outro sujeito era multiplicado por 1000, com o pipeline
+    correto.
+
+    O que este teste faz é diferente: os dados são os MESMOS nos dois lados, e
+    só muda DE ONDE saem a média e o desvio. Se `avaliar_loso` ajustasse a
+    escala no conjunto inteiro, o resultado dele bateria com o braço vazado."""
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.svm import SVC
+
     X, y, g = conjunto_separavel(n_sujeitos=8)
-    r_limpo = classificador.avaliar_loso(X, y, g, n_dobras_internas=2)
+    X[g == 0] *= 50.0     # o sujeito de teste tem escala própria
 
-    X2, y2, g2 = X.copy(), y.copy(), g.copy()
-    X2[g2 == 7] *= 1000.0
-    r_sujo = classificador.avaliar_loso(X2, y2, g2, n_dobras_internas=2)
+    grade_fixa = {"svm__C": [1.0], "svm__gamma": ["scale"]}
+    r = classificador.avaliar_loso(
+        X, y, g, grade=grade_fixa, n_dobras_internas=2
+    )
 
-    # Os sete primeiros sujeitos nao mudaram de dado; se a normalizacao fosse
-    # global, os escores deles mudariam por causa do oitavo.
-    np.testing.assert_allclose(
-        r_limpo["escores_por_sujeito"][:7],
-        r_sujo["escores_por_sujeito"][:7],
-        rtol=1e-6,
-        err_msg="o escore de um sujeito mudou por causa de OUTRO sujeito: "
-                "a normalizacao esta sendo ajustada fora da dobra",
+    # O braço VAZADO, construído de propósito: escala ajustada com o teste dentro.
+    treino, teste = g != 0, g == 0
+    escalador = StandardScaler().fit(X)
+    Xn = escalador.transform(X)
+    modelo = SVC(kernel="rbf", C=1.0, gamma="scale")
+    modelo.fit(Xn[treino], y[treino])
+    escore_vazado = float(np.median(modelo.decision_function(Xn[teste])))
+
+    escore_honesto = float(r["escores_por_sujeito"][0])
+    assert not np.isclose(escore_honesto, escore_vazado, rtol=1e-6), (
+        "o escore do LOSO bateu com o de uma normalização ajustada no conjunto "
+        "inteiro: a escala está sendo ajustada fora da dobra"
     )
 ```
 
@@ -457,7 +474,7 @@ git commit -m "Avaliacao LOSO aninhada com SVM e AUC sobre escores de sujeito"
 
 **Interfaces:**
 - Consumes: `avaliar_loso` da Task 2.
-- Produces: `permutar_rotulos_por_sujeito(y, grupos, semente) -> np.ndarray` e `nulo_por_permutacao(X, y, grupos, n_permutacoes=100, **kw) -> dict` com `auc_observada`, `aucs_nulas`, `p_empirico`, `n_permutacoes`.
+- Produces: `permutar_rotulos_por_sujeito(y, grupos, semente) -> np.ndarray` e `nulo_por_permutacao(X, y, grupos, n_permutacoes=100, semente=0, **kw) -> dict` com `auc_observada`, `aucs_nulas`, `media_nula`, `desvio_nulo`, `p_empirico`, `n_permutacoes`, `decisoes`.
 
 **Contexto:** com 121 sujeitos, uma AUC de 0,62 pode ser sinal fraco ou ruído. O nulo dá a distribuição sob a hipótese nula. **A permutação é do rótulo de cada sujeito, não de cada época** — permutar por época quebraria a estrutura de sujeito e produziria um nulo otimista demais, fazendo qualquer AUC parecer significativa.
 
@@ -593,7 +610,7 @@ git commit -m "Nulo por permutacao de rotulo por sujeito, com p-valor empirico"
 
 **Interfaces:**
 - Consumes: `caracteristicas.razao_theta_beta`, `caracteristicas.potencia_de_banda`, `receita.montar`, `receita.salvar`.
-- Produces: `montar_conjunto_tbr(df, duracao_s, passo_s, max_sujeitos=None) -> (X, y, grupos, ids_originais, nomes, decisoes)` e `escrever_csv(caminho, X, y, ids_originais, indices_epoca, nomes) -> None`.
+- Produces: `montar_conjunto_tbr(df, duracao_s=4.0, passo_s=4.0, max_sujeitos=None) -> (X, y, grupos, ids_originais, indices_epoca, nomes, decisoes)` — **sete** valores e `escrever_csv(caminho, X, y, ids_originais, indices_epoca, nomes) -> None`.
 
 **Contexto:** este é o contrato entre o app e o `eeg_transformer`, hoje inexistente. O campo que importa é `sujeito_id`: tem que ser o ID **original** do adhdata (`v10p`), não o índice interno (`0`, `1`, `2`). Sem ele o transformer não consegue refazer a partição por sujeito e o CSV é inútil para o propósito que tem.
 

@@ -236,9 +236,14 @@ Além dos habituais de contorno, três que existem para impedir defeitos especí
 
 1. **`test_loso_nao_vaza_sujeito`** — nenhum `sujeito_id` aparece em treino e teste da mesma dobra.
    Redundante com o `GroupKFold`, e deliberado: a garantia fica afirmada no ponto de uso.
-2. **`test_hiperparametro_nao_ve_o_teste`** — construído com um sinal em que o sujeito de teste
-   tem escala propositalmente diferente; se o `StandardScaler` for ajustado fora da dobra, a métrica
-   muda de forma detectável e o teste falha.
+2. **`test_normalizacao_ajustada_fora_da_dobra_mudaria_o_escore`** — os MESMOS dados dos dois
+   lados, mudando só de onde saem média e desvio: dentro da dobra contra o conjunto inteiro. Se o
+   `StandardScaler` fosse ajustado fora da dobra, o escore do LOSO bateria com o do braço vazado.
+
+   ⚠️ **Correção de 08/09/2026.** A primeira redação deste teste alterava o dado de um sujeito e
+   exigia que os escores dos outros não mudassem. Era inválida: nas dobras dos outros sujeitos,
+   aquele sujeito é dado de **treino legítimo**, e mudar o treino muda o modelo. Nenhum pipeline
+   correto passaria. Medido: o escore de um sujeito ia de −0,82 para +1,00, com o pipeline certo.
 3. **`test_permutacao_produz_auc_de_acaso`** — com rótulos permutados por sujeito, a AUC média fica
    próxima de 0,5. Se der muito acima, há vazamento em algum lugar do pipeline.
 
