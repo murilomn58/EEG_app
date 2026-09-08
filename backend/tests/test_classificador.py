@@ -141,3 +141,59 @@ def test_normalizacao_ajustada_fora_da_dobra_mudaria_o_escore():
         "o escore do LOSO bateu com o de uma normalização ajustada no conjunto "
         "inteiro: a escala está sendo ajustada fora da dobra"
     )
+
+
+def test_permutacao_mantem_o_rotulo_constante_dentro_do_sujeito():
+    """Permutar por época destruiria a estrutura de sujeito.
+
+    Esse é o defeito silencioso do nulo: com rótulo embaralhado por época, cada
+    sujeito passa a ter as duas classes, o classificador não consegue aprender
+    nada e a AUC nula despenca — fazendo QUALQUER AUC observada parecer
+    significativa."""
+    y = np.array([0, 0, 0, 1, 1, 1, 0, 0, 0])
+    g = np.array([0, 0, 0, 1, 1, 1, 2, 2, 2])
+
+    yp = classificador.permutar_rotulos_por_sujeito(y, g, semente=3)
+
+    for sid in np.unique(g):
+        assert len(np.unique(yp[g == sid])) == 1, "sujeito ficou com dois rótulos"
+    assert sorted(yp.tolist()) == sorted(y.tolist()), "a contagem de classes mudou"
+
+
+def test_nulo_por_permutacao_fica_bem_abaixo_do_sinal():
+    """A AUC nula fica bem abaixo da AUC do sinal separável.
+
+    NÃO se afirma que a nula ronda 0,5, porque no LOSO ela NÃO é centrada em
+    0,5. Medido em 08/09/2026: média 0,086 com 8 sujeitos e 0,348 com 16.
+
+    A razão é estrutural e não é defeito. Ao tirar o sujeito de teste do
+    treino, o treino fica desbalanceado CONTRA a classe dele — sempre, por
+    construção. O modelo aprende a maioria e erra justamente nele. A
+    correlação entre o desbalanceio do treino e o rótulo do sujeito de teste
+    foi medida em 2000 sorteios por tamanho: −0,071 com 8 sujeitos, −0,033 com
+    16, −0,013 com 40 e −0,004 com 121. Escala com 1/n, que é a assinatura da
+    origem combinatória.
+
+    Isto é a razão de o nulo existir, e não um problema dele: o p-valor compara
+    a AUC observada com a distribuição nula MEDIDA. Comparar com 0,5 teórico é
+    que seria errado.
+
+    O teto de 0,75 continua valendo e é o que pega vazamento: se o pipeline
+    vazasse, a AUC nula subiria, porque o modelo reconheceria o sujeito em vez
+    do rótulo."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+
+    r = classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=8, n_dobras_internas=2, semente=0
+    )
+
+    assert len(r["aucs_nulas"]) == 8
+    assert float(np.mean(r["aucs_nulas"])) < 0.75, (
+        "a AUC nula subiu: com rótulos permutados o modelo não deveria "
+        "distinguir nada, e uma nula alta indica vazamento"
+    )
+    assert r["media_nula"] < r["auc_observada"], (
+        "a AUC observada não superou a nula: o sinal separável do conjunto "
+        "sintético deveria bater a permutação"
+    )
+    assert 0.0 <= r["p_empirico"] <= 1.0

@@ -176,3 +176,60 @@ def avaliar_loso(X, y, grupos, estimador=None, grade=None,
             "dobras": dobras,
         },
     }
+
+
+def permutar_rotulos_por_sujeito(y, grupos, semente=0):
+    """Embaralha os rótulos ENTRE sujeitos, mantendo-os constantes DENTRO.
+
+    A distinção é o nulo inteiro. Permutar por época daria a cada sujeito as
+    duas classes; nenhum classificador aprenderia nada, a AUC nula cairia bem
+    abaixo de 0,5 e qualquer resultado observado passaria por significativo.
+
+    Permutando por sujeito, o nulo preserva tudo o que não é o rótulo — o
+    desequilíbrio de épocas, a estrutura de correlação dentro do sujeito — e
+    mede exatamente o que se quer medir."""
+    y = np.asarray(y)
+    grupos = np.asarray(grupos)
+
+    ids = np.unique(grupos)
+    rot_por_sujeito = np.array([np.unique(y[grupos == s])[0] for s in ids])
+
+    embaralhados = rot_por_sujeito.copy()
+    np.random.default_rng(semente).shuffle(embaralhados)
+
+    saida = np.empty_like(y)
+    for sid, rot in zip(ids, embaralhados):
+        saida[grupos == sid] = rot
+    return saida
+
+
+def nulo_por_permutacao(X, y, grupos, n_permutacoes=100, semente=0, **kw):
+    """AUC observada, distribuição sob o nulo e p-valor empírico.
+
+    O p-valor usa a correção de Phipson e Smyth (2010), `(b + 1) / (m + 1)`:
+    com m permutações, um p-valor de zero é impossível de sustentar, e o
+    estimador ingênuo `b / m` produz exatamente isso quando nenhuma permutação
+    supera a observação."""
+    r_obs = avaliar_loso(X, y, grupos, semente=semente, **kw)
+    auc_obs = r_obs["auc"]
+
+    aucs = []
+    for i in range(n_permutacoes):
+        yp = permutar_rotulos_por_sujeito(y, grupos, semente=semente + i + 1)
+        aucs.append(avaliar_loso(X, yp, grupos, semente=semente, **kw)["auc"])
+    aucs = np.array(aucs, dtype=float)
+
+    b = int(np.sum(aucs >= auc_obs))
+    return {
+        "auc_observada": auc_obs,
+        "aucs_nulas": aucs,
+        "media_nula": float(aucs.mean()),
+        "desvio_nulo": float(aucs.std()),
+        "p_empirico": float((b + 1) / (n_permutacoes + 1)),
+        "n_permutacoes": int(n_permutacoes),
+        "decisoes": {
+            "permutacao": "rótulo por SUJEITO, nunca por época",
+            "p_valor": "(b+1)/(m+1), Phipson e Smyth 2010",
+            "avaliacao": r_obs["decisoes"],
+        },
+    }
