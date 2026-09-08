@@ -12,6 +12,38 @@ gravação — uma razão de 5,4 —, e a média deixaria uma única época cont
 por artefato deslocar o escore de um sujeito inteiro. A mediana não.
 """
 import numpy as np
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.model_selection import (GridSearchCV, LeaveOneGroupOut,
+                                     StratifiedGroupKFold)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+# A grade do interno. Pequena de propósito: cada valor a mais multiplica 121
+# dobras externas por 5 internas, e uma grade generosa aqui compra decimais de
+# AUC ao custo de horas.
+GRADE_SVM = {
+    "svm__C": [0.1, 1.0, 10.0, 100.0],
+    "svm__gamma": ["scale", 0.01, 0.1],
+}
+
+
+def estimador_svm():
+    """SVM RBF com a escala DENTRO do pipeline.
+
+    A escala tem de ser um passo do Pipeline, e não uma transformação aplicada
+    antes: é isso que faz o sklearn reajustá-la a cada dobra, em vez de usar uma
+    média calculada com o sujeito de teste dentro.
+
+    `probability` fica no default (False), e a AUC sai de `decision_function`.
+    Ligá-lo acrescentaria um Platt scaling com CV próprio, multiplicando o custo
+    por cerca de cinco para produzir a mesma ordenação. Passá-lo explicitamente,
+    mesmo como False, dispara aviso de depreciação no sklearn 1.9 e deixa de
+    funcionar na 1.11."""
+    return Pipeline([
+        ("escala", StandardScaler()),
+        ("svm", SVC(kernel="rbf")),
+    ])
 
 
 def agregar_por_sujeito(escores, grupos, rotulos):
@@ -46,3 +78,101 @@ def agregar_por_sujeito(escores, grupos, rotulos):
         rot_s[i] = rot_unicos[0]
 
     return esc_s, rot_s, ids
+
+
+def avaliar_loso(X, y, grupos, estimador=None, grade=None,
+                 n_dobras_internas=5, semente=0):
+    """Nested CV: LOSO externo, StratifiedGroupKFold interno para os hiperparâmetros.
+
+    POR QUE A AUC SAI DE UMA CONTA SÓ, NO FIM
+
+    Cada dobra externa testa UM sujeito. Uma dobra com um sujeito tem uma classe
+    só, e a AUC de uma classe só é indefinida — o sklearn avisa e devolve NaN.
+    Uma 'AUC média das dobras' aqui seria a média de 121 NaN.
+
+    O que se faz: acumular o escore de cada sujeito ao longo das dobras e
+    calcular a AUC uma vez, sobre o vetor de escores e o vetor de rótulos.
+
+    O escore de cada época sai de `decision_function`, que é a distância
+    assinada ao hiperplano. Não é probabilidade e não precisa ser: a AUC depende
+    só da ordenação."""
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y)
+    grupos = np.asarray(grupos)
+
+    if len(np.unique(grupos)) < 2:
+        raise ValueError(
+            f"LOSO precisa de pelo menos 2 sujeitos, há {len(np.unique(grupos))}"
+        )
+
+    estimador = estimador if estimador is not None else estimador_svm()
+    grade = grade if grade is not None else GRADE_SVM
+
+    escores = np.empty(len(y), dtype=float)
+    dobras = []
+
+    for treino, teste in LeaveOneGroupOut().split(X, y, groups=grupos):
+        g_treino = grupos[treino]
+        sujeito_teste = np.unique(grupos[teste])[0]
+
+        # O interno nunca vê o sujeito de teste: ele parte de `treino`.
+        #
+        # StratifiedGroupKFold, e NÃO GroupKFold. Medido em 08/09/2026: o
+        # GroupKFold respeita a fronteira de sujeito mas ignora a classe, e com
+        # poucos sujeitos ele produz dobra interna com UMA CLASSE SÓ — o SVC
+        # levanta "The number of classes has to be greater than one; got 1
+        # class" e o experimento inteiro morre no meio. O estratificado respeita
+        # as duas restrições ao mesmo tempo.
+        n_int = min(n_dobras_internas, len(np.unique(g_treino)))
+        busca = GridSearchCV(
+            estimador, grade,
+            cv=StratifiedGroupKFold(n_splits=n_int, shuffle=True,
+                                    random_state=semente),
+            scoring="roc_auc",
+            n_jobs=1,
+        )
+        busca.fit(X[treino], y[treino], groups=g_treino)
+        escores[teste] = busca.best_estimator_.decision_function(X[teste])
+
+        dobras.append({
+            "sujeito_de_teste": sujeito_teste.item()
+            if hasattr(sujeito_teste, "item") else sujeito_teste,
+            "sujeitos_de_treino": [
+                s.item() if hasattr(s, "item") else s
+                for s in np.unique(g_treino)
+            ],
+            "melhores_parametros": busca.best_params_,
+            "n_dobras_internas": int(n_int),
+        })
+
+    esc_s, rot_s, ids = agregar_por_sujeito(escores, grupos, y)
+
+    if len(np.unique(rot_s)) < 2:
+        raise ValueError(
+            "todos os sujeitos têm o mesmo rótulo: a AUC não é definida"
+        )
+
+    auc = float(roc_auc_score(rot_s, esc_s))
+    predito = (esc_s > 0).astype(int)
+
+    return {
+        "auc": auc,
+        "acuracia": float(accuracy_score(rot_s, predito)),
+        "n_sujeitos": int(len(ids)),
+        "escores_por_sujeito": esc_s,
+        "rotulos_por_sujeito": rot_s,
+        "ids_sujeito": ids,
+        "hiperparametros_por_dobra": [d["melhores_parametros"] for d in dobras],
+        "decisoes": {
+            "externo": "LeaveOneGroupOut (LOSO)",
+            "interno": f"StratifiedGroupKFold({n_dobras_internas}) com scoring roc_auc",
+            "agregacao": "mediana dos escores das épocas do sujeito",
+            "escore": "decision_function (distância assinada ao hiperplano)",
+            "auc": "calculada UMA vez sobre os escores de sujeito; a AUC por "
+                   "dobra é indefinida no LOSO porque a dobra tem uma classe só",
+            "grade": {k: list(v) for k, v in grade.items()},
+            "semente": int(semente),
+            "n_epocas": int(len(y)),
+            "dobras": dobras,
+        },
+    }
