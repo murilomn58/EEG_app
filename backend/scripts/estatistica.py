@@ -62,3 +62,69 @@ def mediana_iqr(x):
         return {"mediana": None, "q1": None, "q3": None, "n": 0}
     q1, med, q3 = np.percentile(v, [25, 50, 75])
     return {"mediana": float(med), "q1": float(q1), "q3": float(q3), "n": int(len(v))}
+
+
+def erro_padrao_auc_hanley_mcneil(auc, n0, n1):
+    """Erro-padrão da AUC de uma validação LOSO já rodada, pela aproximação de
+    Hanley & McNeil (1982).
+
+    POR QUE HANLEY-MCNEIL E NÃO BOOTSTRAP
+
+    A validação LOSO deste experimento já levou ~8h. Um bootstrap sobre o
+    resultado exigiria refazer a validação centenas de vezes para reamostrar
+    os sujeitos — refazer o experimento, não analisar o que ele já produziu.
+    Hanley-McNeil dá o erro-padrão em forma fechada, a partir só da AUC e das
+    contagens de cada classe, sem retreinar nada.
+
+    O QUE A APROXIMAÇÃO É E O QUE ELA NÃO É
+
+    É assintótica (vale melhor com n grande) e trata a AUC como uma estatística
+    U de Mann-Whitney, não como uma proporção simples: por isso ela NÃO é
+    `auc*(1-auc)/n` (isso subestimaria a variância, porque ignora que a mesma
+    AUC entra em muitos pares comparados, correlacionados entre si). Q1 e Q2
+    capturam exatamente essa correlação entre pares que compartilham um dos
+    dois sujeitos.
+
+    n0 E n1 NÃO SÃO INTERCAMBIÁVEIS
+
+    `n1` é a contagem da classe POSITIVA (aqui, sujeitos ADHD) e `n0` da classe
+    NEGATIVA (Control). Trocar os dois muda o resultado: a fórmula não é
+    simétrica em n0/n1 quando AUC ≠ 0,5, porque Q1 pondera os "empates do lado
+    positivo" e Q2 os do lado negativo, e as duas quantidades só coincidem
+    quando AUC = 0,5. Errar a ordem não quebra visivelmente (o número sai
+    plausível), o que o torna o tipo de engano que passa despercebido — daí
+    a validação cruzada ser explícita nos testes.
+    """
+    if not (0.0 <= auc <= 1.0):
+        raise ValueError(
+            f"AUC={auc!r} fora de [0, 1]: a fórmula de Hanley-McNeil não tem "
+            "sentido para uma AUC que não é uma probabilidade."
+        )
+    if n0 < 2 or n1 < 2:
+        raise ValueError(
+            f"n0={n0!r}, n1={n1!r}: a aproximação assintótica de Hanley-McNeil "
+            "exige pelo menos 2 sujeitos em cada classe para que Q1 e Q2 façam "
+            "sentido como estimativas — com n menor que isso o erro-padrão "
+            "resultante não sustenta interpretação."
+        )
+    q1 = auc / (2 - auc)
+    q2 = 2 * auc ** 2 / (1 + auc)
+    se2 = (
+        auc * (1 - auc)
+        + (n1 - 1) * (q1 - auc ** 2)
+        + (n0 - 1) * (q2 - auc ** 2)
+    ) / (n0 * n1)
+    return float(np.sqrt(se2))
+
+
+def ic95_auc(auc, n0, n1):
+    """IC95% da AUC (`auc ± 1,96·erro-padrão`), truncado a [0, 1].
+
+    O truncamento existe porque a aproximação normal de Hanley-McNeil pode
+    devolver um limite fora de [0, 1] perto dos extremos (AUC alta com n
+    pequeno, por exemplo) — e uma AUC, sendo uma probabilidade, não pode ter
+    intervalo de confiança fora dessa faixa por definição."""
+    erro_padrao = erro_padrao_auc_hanley_mcneil(auc, n0, n1)
+    limite_inferior = max(0.0, auc - 1.96 * erro_padrao)
+    limite_superior = min(1.0, auc + 1.96 * erro_padrao)
+    return limite_inferior, limite_superior
