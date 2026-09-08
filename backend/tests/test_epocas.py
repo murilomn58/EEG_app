@@ -68,6 +68,96 @@ def test_cortes_de_eventos_ignora_onset_zero():
 
 
 # ---------------------------------------------------------------------------
+# blocos ancorados em evento (olhos abertos / fechados do HBN)
+# ---------------------------------------------------------------------------
+
+ALVOS = ("instructed_toOpenEyes", "instructed_toCloseEyes")
+
+
+def _eventos_oc():
+    """O padrão medido nos events.tsv do ds005505: abre em t, fecha em t+20,
+    abre de novo em t+60. Aqui com t = 10 s, e o último "abre" sem par."""
+    return [
+        {"onset": 10.0, "valor": "instructed_toOpenEyes"},
+        {"onset": 30.0, "valor": "instructed_toCloseEyes"},
+        {"onset": 70.0, "valor": "instructed_toOpenEyes"},
+        {"onset": 90.0, "valor": "instructed_toCloseEyes"},
+        {"onset": 130.0, "valor": "instructed_toOpenEyes"},
+    ]
+
+
+def test_blocos_alternam_e_medem_a_duracao_pelo_proximo_evento():
+    blocos, dec = epocas.blocos_entre_eventos(_eventos_oc(), 100.0, 15000, ALVOS)
+    assert blocos == [
+        (1000, 3000, "instructed_toOpenEyes"),
+        (3000, 7000, "instructed_toCloseEyes"),
+        (7000, 9000, "instructed_toOpenEyes"),
+        (9000, 13000, "instructed_toCloseEyes"),
+    ]
+    # 20 s abertos, 40 s fechados: medido, não fixado
+    assert dec["duracao_s_por_valor"]["instructed_toOpenEyes"] == [20.0, 20.0]
+    assert dec["duracao_s_por_valor"]["instructed_toCloseEyes"] == [40.0, 40.0]
+    assert dec["n_blocos_por_valor"] == {"instructed_toOpenEyes": 2,
+                                         "instructed_toCloseEyes": 2}
+
+
+def test_ultimo_alvo_sem_fechamento_e_declarado_e_nao_vira_bloco():
+    blocos, dec = epocas.blocos_entre_eventos(_eventos_oc(), 100.0, 15000, ALVOS)
+    assert all(fim <= 13000 for _, fim, _ in blocos)
+    assert dec["ultimo_alvo_sem_fechamento"] == 130.0
+    assert dec["n_marcos"] == 5
+
+
+def test_evento_de_outra_tarefa_nao_abre_nem_fecha_bloco():
+    """O sub-NDARAC904DMU carrega eventos de seqLearning dentro do
+    RestingState. Eles não podem mexer nas bordas dos blocos de repouso."""
+    eventos = _eventos_oc() + [
+        {"onset": 50.0, "valor": "dot_no1_ON"},
+        {"onset": 55.0, "valor": "seqLearning_start"},
+    ]
+    com, _ = epocas.blocos_entre_eventos(eventos, 100.0, 15000, ALVOS)
+    sem, _ = epocas.blocos_entre_eventos(_eventos_oc(), 100.0, 15000, ALVOS)
+    assert com == sem
+
+
+def test_corte_dentro_do_bloco_recorta_sem_perder_o_rotulo():
+    """Um boundary em 50 s cai dentro do bloco fechado (30 a 70 s): o bloco
+    vira dois segmentos, os dois ainda rotulados como fechados, e a duração
+    declarada continua sendo a do bloco inteiro."""
+    blocos, dec = epocas.blocos_entre_eventos(
+        _eventos_oc(), 100.0, 15000, ALVOS, cortes=[5000]
+    )
+    fechados = [(a, b) for a, b, v in blocos if v == "instructed_toCloseEyes"]
+    assert (3000, 5000) in fechados and (5000, 7000) in fechados
+    assert dec["n_blocos_por_valor"]["instructed_toCloseEyes"] == 2
+    assert dec["duracao_s_por_valor"]["instructed_toCloseEyes"] == [40.0, 40.0]
+    assert dec["blocos_recortados_por_corte"] == 1
+
+
+def test_nenhuma_epoca_mistura_olhos_abertos_com_fechados():
+    """A garantia central do módulo, aplicada ao caso novo: sinal 1,0 nos
+    blocos abertos e 100,0 nos fechados; epocar cada condição pelos seus
+    segmentos; nenhuma época pode conter as duas amplitudes."""
+    fs = 100.0
+    n = 15000
+    dado = np.zeros((2, n))
+    blocos, _ = epocas.blocos_entre_eventos(_eventos_oc(), fs, n, ALVOS)
+    for a, b, v in blocos:
+        dado[:, a:b] = 1.0 if v == "instructed_toOpenEyes" else 100.0
+
+    for condicao, esperado in (("instructed_toOpenEyes", 1.0),
+                               ("instructed_toCloseEyes", 100.0)):
+        segs = [(a, b) for a, b, v in blocos if v == condicao]
+        janelas, dec = epocas.epocar_janela_fixa(dado, fs, 2.0, 2.0, segs)
+        assert len(janelas) > 0
+        for ep in janelas:
+            assert set(np.unique(ep).tolist()) == {esperado}
+    # 2 blocos abertos de 20 s -> 20 épocas de 2 s; 2 fechados de 40 s -> 40
+    abertos = [(a, b) for a, b, v in blocos if v == "instructed_toOpenEyes"]
+    assert epocas.epocar_janela_fixa(dado, fs, 2.0, 2.0, abertos)[1]["n_epocas"] == 20
+
+
+# ---------------------------------------------------------------------------
 # os segmentos contínuos
 # ---------------------------------------------------------------------------
 

@@ -250,6 +250,12 @@
   .analise-caveat { margin: 4px 0 12px; font-size: 10.5px; color: var(--ink-dim); line-height: 1.5; }
 
   .analise-barras { display: flex; flex-direction: column; gap: 6px; }
+  #tbr-backend-bloco { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  #tbr-backend-calcular { font-size: 11px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: #eef3fb; cursor: pointer; }
+  #tbr-backend-calcular:disabled { opacity: 0.5; cursor: default; }
+  #tbr-backend-resultado { margin-top: 8px; font-size: 11px; }
+  .tbr-backend-canais { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0; }
+  .tbr-backend-canal { font-variant-numeric: tabular-nums; color: #cfe3ff; }
   .analise-barra-linha { display: grid; grid-template-columns: 42px 1fr 52px; align-items: center; gap: 8px; font-size: 11px; }
   .analise-barra-fundo { position: relative; height: 12px; background: rgba(154,166,191,0.08); border-radius: 3px; overflow: hidden; }
   .analise-barra-preenchimento { height: 100%; border-radius: 3px; }
@@ -699,6 +705,26 @@
           <b>não diagnostica nada</b>: o marcador é fraco isoladamente (38–63% de sensibilidade na literatura), o
           limiar vem de EEG em repouso, e neste banco a diferença entre grupos nem existe (ver o aviso no topo).</p>
         <div id="tbr-barras" class="analise-barras"></div>
+
+        <!-- Segunda medida, deliberadamente separada da de cima. A barra
+             acima é a TBR AO VIVO, sobre a janela curta que está na tela
+             agora (~3-4s), com o Welch em JS deste arquivo. A daqui é a TBR
+             do REGISTRO INTEIRO, épocas de 2s sem sobreposição que nunca
+             atravessam boundary/fronteira de sujeito, calculada por
+             caracteristicas.razao_theta_beta() no backend — a mesma função
+             testada que caracteriza_estracao usa, não uma segunda cópia da
+             conta. As duas podem legitimamente divergir (uma é um instante,
+             a outra é a média do registro todo) — por isso ficam lado a
+             lado com a proveniência escrita, em vez de uma escondendo a
+             outra. -->
+        <div class="analise-caveat" id="tbr-backend-bloco">
+          <p><b>TBR do registro inteiro</b> — épocas de 2 s sem sobreposição, sem atravessar
+            descontinuidade, média por canal. Calculada pelo backend (a mesma função testada em
+            <code>caracteristicas.razao_theta_beta</code>), não pelo Welch em JS acima — as duas
+            podem divergir por medirem coisas diferentes: um instante contra o registro todo.</p>
+          <button id="tbr-backend-calcular">Calcular sobre o registro inteiro</button>
+          <div id="tbr-backend-resultado"></div>
+        </div>
       </div>
 
       <div class="analise-painel">
@@ -1589,6 +1615,19 @@ for (const c of CANAIS_19) {
 // Repare: Cz JÁ está em CANAIS_19 desde a unificação da montagem com o
 // CSV — por isso a média do CAR usa CANAIS_19.length puro, sem "+1".
 let referenciaAtiva = "nativa";
+// Qual BASE (nome do backend: nativa/car/cz/orelha) está de fato aplicada
+// aos canais que `gravacaoAtual.canais` devolve, para dado REAL. Enquanto
+// vale "nativa", passoSinal/_referenciar continuam recalculando cz/average
+// em JS, como sempre fizeram (é o caminho do sinal SINTÉTICO, que não tem
+// /raw-data pra pedir). Quando vale outra coisa, os canais em uso já saíram
+// do backend RE-REFERENCIADOS pelo MNE, e aplicar a conta em JS de novo por
+// cima seria referenciar duas vezes. Ver buscarVersaoComBase.
+let baseAtivaBackend = "nativa";
+// A base que o usuário pediu enquanto o backend ainda não respondeu — mesmo
+// papel que preprocDesejado tem para o preproc, e pelo mesmo motivo: sem
+// isto, pedir "Average" muda o botão mas o sinal continua na base antiga até
+// a resposta chegar, sem nada lembrando de aplicar de verdade quando chegar.
+let baseDesejada = null;
 // A referência declarada do banco que está tocando, preenchida pelo wizard.
 // Existe porque "nativa" quer dizer coisas diferentes em bancos diferentes:
 // no adhdata é linked-ears (A1/A2), no HBN é Cz. Enquanto o app só servia o
@@ -1685,20 +1724,29 @@ function passoSinal(dt, lote) {
   for (const c of CANAIS_19) brutos[c] = fonteExterna ? fonteExterna(c, tGlobal) : amostraSintetica(c, tGlobal);
 
   let referenciados = brutos;
-  if (referenciaAtiva === "average") {
-    // a média comum é sobre os canais DA ANÁLISE: um eletrodo que o usuário
-    // tirou (por ruim, solto ou plano) não pode contaminar a referência de
-    // todos os outros — que é exatamente o que o CAR faria com ele dentro
-    const dentro = canaisAnalisados();
-    let soma = 0;
-    for (const c of dentro) soma += brutos[c]; // Cz já está em CANAIS_19, entra na soma normalmente
-    const media = dentro.length ? soma / dentro.length : 0;
-    referenciados = {};
-    for (const c of CANAIS_19) referenciados[c] = brutos[c] - media;
-  } else if (referenciaAtiva === "cz") {
-    const vCz = brutos["Cz"];
-    referenciados = {};
-    for (const c of CANAIS_19) referenciados[c] = brutos[c] - vCz;
+  // Se o backend já forneceu a base pedida (dado real), `brutos` ACIMA já
+  // veio re-referenciado pelo MNE — é `fonteExterna` lendo
+  // `gravacaoAtual.canais`, e esse getter passa a apontar para a versão
+  // com base quando ela chega (ver buscarVersaoComBase). Recalcular aqui
+  // em cima seria referenciar duas vezes. Só entra na conta em JS quando
+  // não há gravação real com essa base pronta — o caso do sinal sintético,
+  // que não tem /raw-data pra pedir, e o interstício antes da resposta.
+  if (baseAtivaBackend === "nativa") {
+    if (referenciaAtiva === "average") {
+      // a média comum é sobre os canais DA ANÁLISE: um eletrodo que o usuário
+      // tirou (por ruim, solto ou plano) não pode contaminar a referência de
+      // todos os outros — que é exatamente o que o CAR faria com ele dentro
+      const dentro = canaisAnalisados();
+      let soma = 0;
+      for (const c of dentro) soma += brutos[c]; // Cz já está em CANAIS_19, entra na soma normalmente
+      const media = dentro.length ? soma / dentro.length : 0;
+      referenciados = {};
+      for (const c of CANAIS_19) referenciados[c] = brutos[c] - media;
+    } else if (referenciaAtiva === "cz") {
+      const vCz = brutos["Cz"];
+      referenciados = {};
+      for (const c of CANAIS_19) referenciados[c] = brutos[c] - vCz;
+    }
   }
 
   commitAmostras(referenciados, tGlobal);
@@ -2094,9 +2142,12 @@ function _referenciar(valores) {
 
 // Devolve {bases, escalas}: por canal, a linha de base (mediana) e a
 // meia-amplitude que a faixa deve representar (p95 do desvio absoluto).
-// `canais` é o objeto {nome: Array} que veio do /raw-data, CRU — a
-// referência em vigor é aplicada aqui dentro.
-function escalasRobustas(canais) {
+// `canais` é o objeto {nome: Array} que veio do /raw-data — CRU quando
+// `jaReferenciado` é falso (aplica `_referenciar` em JS, como sempre); JÁ
+// RE-REFERENCIADO PELO BACKEND quando `jaReferenciado` é true (o caso de
+// `buscarVersaoComBase`), e então NÃO se aplica `_referenciar` de novo —
+// isso duplicaria a conta, do mesmo jeito que duplicá-la em `passoSinal`.
+function escalasRobustas(canais, jaReferenciado) {
   // amostra o registro já re-referenciado, uma passada só
   const amostras = {};
   for (const nome of CANAIS_19) amostras[nome] = [];
@@ -2104,7 +2155,7 @@ function escalasRobustas(canais) {
   for (let i = 0; i < n; i += PASSO_AMOSTRAGEM_ESCALA) {
     const linha = {};
     for (const c of CANAIS_19) linha[c] = (canais[c] || [])[i] || 0;
-    const ref = _referenciar(linha);
+    const ref = jaReferenciado ? linha : _referenciar(linha);
     for (const c of CANAIS_19) amostras[c].push(ref[c]);
   }
 
@@ -3032,6 +3083,58 @@ function dimensaoFractalHiguchi(serie, kMax = KMAX_HIGUCHI) {
 }
 
 const CORES_BANDA_ANALISE = { delta: "#6f8dd9", theta: "#9a7fe0", alpha: "#3dbb6e", beta: "#e8a33d", gamma: "#d15a7a" };
+
+// TBR do REGISTRO INTEIRO, via /features/tbr — fecha a Missão 2 (01/09/2026)
+// de verdade: sob demanda (não por frame, é mais pesado que o traçado ao
+// vivo), sobre o sujeito/preproc/base que estão tocando agora. Não tenta
+// reconciliar com a barra "ao vivo" acima: são medidas de coisas diferentes
+// e ambas ficam visíveis, com a proveniência escrita.
+const btnTbrBackend = document.getElementById("tbr-backend-calcular");
+const tbrBackendResultadoEl = document.getElementById("tbr-backend-resultado");
+
+function calcularTbrBackend() {
+  if (!gravacaoAtual) {
+    tbrBackendResultadoEl.textContent = "Toque um sujeito real primeiro (\"Tocar dado real\").";
+    return;
+  }
+  const preprocPedido = preprocAtivo === "nenhum" ? "basico" : preprocAtivo;
+  const basePedida = _BASE_BACKEND[referenciaAtiva] || referenciaAtiva;
+  btnTbrBackend.disabled = true;
+  tbrBackendResultadoEl.textContent = "Calculando no backend…";
+
+  fetch(
+    `${BACKEND_URL}/features/tbr?subject_id=${encodeURIComponent(gravacaoAtual.sujeito)}`
+    + `&preproc=${encodeURIComponent(preprocPedido)}&base=${encodeURIComponent(basePedida)}&${paramBanco()}`
+  )
+    .then(async (r) => {
+      if (!r.ok) {
+        const corpo = await r.json().catch(() => ({}));
+        throw new Error(corpo.detail || ("status " + r.status));
+      }
+      return r.json();
+    })
+    .then((dados) => {
+      btnTbrBackend.disabled = false;
+      const linhas = CANAIS_19.map((c) => {
+        const v = dados.tbr_por_canal[c];
+        const texto = v === null || v === undefined ? "—" : v.toFixed(2);
+        const alerta = (v !== null && v !== undefined && v >= dados.decisoes.limiar_classico) ? " ⚠️" : "";
+        return `<span class="tbr-backend-canal">${c}: ${texto}${alerta}</span>`;
+      });
+      tbrBackendResultadoEl.innerHTML = (
+        `<p>preproc=${dados.preproc} · base=${dados.base} · `
+        + `${dados.n_epocas_validas} época(s) válida(s)</p>`
+        + `<div class="tbr-backend-canais">${linhas.join("")}</div>`
+        + `<p class="analise-caveat">${dados.decisoes.ressalva}</p>`
+      );
+    })
+    .catch((err) => {
+      btnTbrBackend.disabled = false;
+      tbrBackendResultadoEl.textContent = "Erro: " + err.message;
+      console.error(err);
+    });
+}
+if (btnTbrBackend) btnTbrBackend.addEventListener("click", calcularTbrBackend);
 
 let ultimaAtualizacaoAnalise = 0;
 function atualizarAnaliseTDAH() {
@@ -4019,18 +4122,96 @@ function aplicarReferenciaUI(valor) {
   }
   referenciaTextoEl.textContent = texto;
 }
+// Habilita/desabilita os botões de referência sem mexer no que o banco já
+// desabilitou por incompatibilidade (rotularBotoesReferencia/baseSuportada).
+function habilitarBotoesReferencia(habilitado) {
+  document.querySelectorAll("#referencia button[data-ref]").forEach((b) => {
+    b.disabled = habilitado ? !baseSuportada(b.dataset.ref) : true;
+  });
+}
+
+// Pede ao backend a MESMA base que passoSinal recalcula em JS, mas calculada
+// de verdade pelo MNE (preproc_basico.aplicar_base) — é o que fecha a Missão
+// 1a: antes desta função, "base" só existia no backend para quem chamasse a
+// API diretamente, e o traçado ao vivo nunca via essa versão. Espelha
+// buscarVersaoFiltrada de propósito, e não por acaso: sequência anti-corrida
+// própria (trocar de sujeito ou preproc com uma busca de base no ar não pode
+// deixar a resposta velha vencer), selo de espera (a troca deixa de ser
+// instantânea) e erro tratado sem derrubar a referência que já valia — as
+// três defesas que a nota "Um dono só para o CAR" registrava como
+// pré-requisito antes de fazer esta troca.
+function buscarVersaoComBase(sujeito, preproc, baseBackend) {
+  const sequencia = ++sequenciaBuscaBase;
+  habilitarBotoesReferencia(false);
+  referenciaTextoEl.textContent = "Recalculando referência no backend…";
+
+  fetch(`${BACKEND_URL}/raw-data?subject_id=${encodeURIComponent(sujeito)}&preproc=${encodeURIComponent(preproc)}&base=${encodeURIComponent(baseBackend)}&${paramBanco()}`)
+    .then(async (r) => {
+      if (!r.ok) {
+        const corpo = await r.json().catch(() => ({}));
+        throw new Error(corpo.detail || ("status " + r.status));
+      }
+      return r.json();
+    })
+    .then((dados) => {
+      // descarta se: outra busca começou depois desta, o sujeito trocou
+      // enquanto esperava, ou não há mais gravação nenhuma carregada
+      if (sequencia !== sequenciaBuscaBase || !gravacaoAtual || gravacaoAtual.sujeito !== sujeito) return;
+      const chave = `${preproc}|${baseBackend}`;
+      gravacaoAtual.canaisPorPreprocBase[chave] = dados.channels;
+      // já vem re-referenciado pelo backend: jaReferenciado=true, para
+      // escalasRobustas não aplicar _referenciar por cima
+      gravacaoAtual.escalasPorPreprocBase[chave] = escalasRobustas(dados.channels, true);
+      habilitarBotoesReferencia(true);
+      // se o usuário ainda quer esta base (não mudou de ideia nem de
+      // preproc enquanto esperava), aplica de verdade agora que chegou —
+      // mesmo padrão do preprocDesejado em buscarVersaoFiltrada
+      if (baseDesejada && (_BASE_BACKEND[baseDesejada] || baseDesejada) === baseBackend && preprocAtivo === preproc) {
+        aplicarReferencia(baseDesejada);
+      }
+    })
+    .catch((err) => {
+      if (sequencia !== sequenciaBuscaBase) return;
+      habilitarBotoesReferencia(true);
+      referenciaTextoEl.textContent = "Referência do backend indisponível (" + err.message + ") — mostrando aproximação local.";
+      console.error(err);
+    });
+}
+
 // Aplica de verdade: quem roda passoSinal é só a principal, então é aqui
 // que a troca de referência passa a valer para o sinal.
+//
+// Para dado REAL, o sinal exibido só é considerado "na base pedida" quando
+// `canaisPorPreprocBase` já tem a versão calculada pelo backend — enquanto
+// ela não chega, a tela mostra a aproximação em JS de sempre (mesma conta
+// que já existia) para não travar a troca esperando rede, e troca para a
+// versão de verdade assim que `buscarVersaoComBase` resolver.
 function aplicarReferencia(valor) {
-  const mudou = referenciaAtiva !== valor;
+  const referenciaMudou = referenciaAtiva !== valor;
   aplicarReferenciaUI(valor);
-  if (!mudou || !gravacaoAtual) return;
+
+  let baseMudou = false;
+  if (gravacaoAtual) {
+    const baseBackend = _BASE_BACKEND[valor] || valor;
+    const chave = `${preprocAtivo}|${baseBackend}`;
+    const jaTemDoBackend = baseBackend !== "nativa" && !!gravacaoAtual.canaisPorPreprocBase[chave];
+    const novaBase = jaTemDoBackend ? baseBackend : "nativa";
+
+    baseMudou = baseAtivaBackend !== novaBase;
+    baseAtivaBackend = novaBase;
+    baseDesejada = (baseBackend !== "nativa" && !jaTemDoBackend) ? valor : null;
+    if (baseDesejada) buscarVersaoComBase(gravacaoAtual.sujeito, preprocAtivo, baseBackend);
+  }
+
+  if ((!referenciaMudou && !baseMudou) || !gravacaoAtual) return;
 
   // A escala e a linha de base foram medidas sobre o sinal com a referência
   // ANTERIOR. Mantê-las depois da troca desloca o traçado pela diferença
   // entre as duas referências — com o offset do adhdata isso são mais de
   // duas alturas de faixa. Recalcular custa uma passada por gravação e é o
-  // que mantém a escala descrevendo o que está na tela.
+  // que mantém a escala descrevendo o que está na tela. (Quando a versão
+  // ativa vem do backend, a escala já foi calculada em buscarVersaoComBase —
+  // este laço só mantém em dia a cópia JS usada como aproximação/fallback.)
   for (const modo of Object.keys(gravacaoAtual.canaisPorPreproc)) {
     const canais = gravacaoAtual.canaisPorPreproc[modo];
     if (canais) gravacaoAtual.escalasPorPreproc[modo] = escalasRobustas(canais);
@@ -4130,6 +4311,7 @@ let preprocDesejado = "nenhum";
 const preprocEl = document.getElementById("preproc");
 const preprocTextoEl = document.getElementById("preproc-texto");
 let sequenciaBuscaFiltrada = 0;
+let sequenciaBuscaBase = 0;
 // Na popup não há gravacaoAtual (ela não faz fetch) — a info do filtro
 // chega pelo BroadcastChannel e fica aqui.
 let infoPreprocRecebida = null;
@@ -4413,6 +4595,13 @@ function pararDadoReal() {
   sequenciaBuscaFiltrada++;
   aplicarPreprocUI("nenhum");
   habilitarBotaoFiltrado(false);
+  // idem para a base: sem gravação real, referenciaAtiva volta a ser
+  // calculada em JS sobre o sintético — não há base do backend para "nativa"
+  // apontar mais
+  sequenciaBuscaBase++;
+  baseAtivaBackend = "nativa";
+  baseDesejada = null;
+  habilitarBotoesReferencia(true);
   btnDadoRealTocar.textContent = "Tocar dado real";
   btnDadoRealTocar.classList.remove("ativo");
   dadoRealStatusEl.textContent = "";
@@ -4442,6 +4631,9 @@ function tocarSujeito(sujeito) {
     gravacaoAtual = null;
     aguardandoGravacao = true;     // nada de sinal sintetico enquanto baixa
     sequenciaBuscaFiltrada++;          // descarta versao filtrada em voo do anterior
+    sequenciaBuscaBase++;              // descarta troca de base em voo do sujeito anterior
+    baseAtivaBackend = "nativa";       // a gravação nova ainda não tem base pedida ao backend
+    baseDesejada = null;
     reiniciarSinal();
     publicarLimpeza();
     limparReconstrucaoFontes();
@@ -4485,7 +4677,19 @@ function tocarSujeito(sujeito) {
           // com o conjunto clínico entrando, a chave passa a ser o nome do
           // preproc e o que não foi buscado simplesmente não existe aqui.
           canaisPorPreproc: { nenhum: dados.channels },
-          get canais() { return this.canaisPorPreproc[preprocAtivo] || this.canaisPorPreproc.nenhum; },
+          // Uma entrada por combinação (preproc, base backend) já buscada —
+          // só existe quando `baseAtivaBackend !== "nativa"`. Chave composta
+          // porque preproc e base são pedidos independentes ao /raw-data, e
+          // trocar um não pode invalidar o cache do outro. Ver
+          // buscarVersaoComBase.
+          canaisPorPreprocBase: {},
+          get canais() {
+            if (baseAtivaBackend !== "nativa") {
+              const c = this.canaisPorPreprocBase[`${preprocAtivo}|${baseAtivaBackend}`];
+              if (c) return c;
+            }
+            return this.canaisPorPreproc[preprocAtivo] || this.canaisPorPreproc.nenhum;
+          },
           infoPreproc: null,
           offsetReal: tGlobal,
           eventos: null, // calculado sob demanda no primeiro "próximo evento"
@@ -4493,8 +4697,21 @@ function tocarSujeito(sujeito) {
           // uma vez. É o que impede o traçado de mudar de tamanho quando um
           // artefato entra ou sai da janela visível. Ver a seção 4a.
           escalasPorPreproc: { nenhum: escalasRobustas(dados.channels) },
-          get escalas() { return (this.escalasPorPreproc[preprocAtivo] || this.escalasPorPreproc.nenhum).escalas; },
-          get bases() { return (this.escalasPorPreproc[preprocAtivo] || this.escalasPorPreproc.nenhum).bases; },
+          escalasPorPreprocBase: {},
+          get escalas() {
+            if (baseAtivaBackend !== "nativa") {
+              const e = this.escalasPorPreprocBase[`${preprocAtivo}|${baseAtivaBackend}`];
+              if (e) return e.escalas;
+            }
+            return (this.escalasPorPreproc[preprocAtivo] || this.escalasPorPreproc.nenhum).escalas;
+          },
+          get bases() {
+            if (baseAtivaBackend !== "nativa") {
+              const e = this.escalasPorPreprocBase[`${preprocAtivo}|${baseAtivaBackend}`];
+              if (e) return e.bases;
+            }
+            return (this.escalasPorPreproc[preprocAtivo] || this.escalasPorPreproc.nenhum).bases;
+          },
         };
         buscarVersaoFiltrada(sujeito);
         window.setEEGData((canal, t) => {
@@ -5563,10 +5780,13 @@ function montarBarraCompacta() {
 // =========================================================================
 const SETUP_CHAVE = "eeg3d.setup.v1";
 
-// tratamento -> (preproc do backend, referência do frontend). O CAR não é um
-// preproc novo do servidor: ele já existe como referenciaAtiva="average",
-// aplicado amostra a amostra em passoSinal. Duplicar no backend criaria dois
-// CARs que podem divergir, e só um deles é medido pelo relatório de QC.
+// tratamento -> (preproc do backend, referência do frontend). "referencia"
+// aqui é só a INTENÇÃO (o valor que aplicarReferencia recebe); desde o
+// fechamento da Missão 1a, o CAR de fato aplicado ao traçado sai do MESMO
+// backend que o relatório de QC mede (preproc_basico.aplicar_base via
+// buscarVersaoComBase), não mais de um segundo cálculo em JS — só há um CAR
+// no projeto agora, e é o testado. O JS ainda calcula a aproximação local
+// enquanto a resposta do backend não chega (ver aplicarReferencia).
 // O PADRÃO MUDOU, e a mudança é clínica e não estética.
 //
 // O app abria em "Bruto". O primeiro traçado que um médico via era o que o

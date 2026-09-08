@@ -569,3 +569,65 @@ def test_source_localization_recusa_infinito(client):
     )
     assert resp.status_code == 400
     assert "finitos" in resp.json()["detail"]
+
+
+# --- /features/tbr -------------------------------------------------------
+# Fecha a Missão 2 (01/09/2026): a TBR já existia como biblioteca testada em
+# caracteristicas.py, mas não tinha endpoint nem chegava à tela. Reaproveita
+# /raw-data (chamado como função Python normal, não HTTP) para não duplicar
+# pré-processamento.
+
+
+def test_features_tbr_sucesso(client_filtravel):
+    resp = client_filtravel.get(
+        "/features/tbr",
+        params={"subject_id": "suj1", "preproc": "basico"},
+    )
+    assert resp.status_code == 200
+    corpo = resp.json()
+
+    assert corpo["subject_id"] == "suj1"
+    assert corpo["preproc"] == "basico"
+    assert corpo["base"] == "nativa"
+    assert set(corpo["tbr_por_canal"].keys()) == set(CANAIS_19)
+    # sinal senoidal limpo a 10 Hz: tem alfa, quase não tem beta nem theta —
+    # o que importa aqui não é o valor, é que o pipeline roda de ponta a
+    # ponta e devolve número (ou None), nunca um erro por canal
+    for valor in corpo["tbr_por_canal"].values():
+        assert valor is None or isinstance(valor, float)
+    assert corpo["n_epocas_validas"] >= 1
+    assert corpo["decisoes"]["numerador"] == "theta"
+    assert corpo["decisoes"]["denominador"] == "beta"
+    assert corpo["decisoes"]["limiar_classico"] == 4.0
+
+
+def test_features_tbr_preproc_nenhum_e_recusado(client_filtravel):
+    """A TBR sobre sinal sem filtro nenhum mistura DC e rede elétrica no
+    cálculo de banda — exatamente o que o pré-processamento existe para
+    tirar. 'nenhum' é válido em /raw-data, mas não aqui."""
+    resp = client_filtravel.get(
+        "/features/tbr",
+        params={"subject_id": "suj1", "preproc": "nenhum"},
+    )
+    assert resp.status_code == 400
+    assert "preproc inválido" in resp.json()["detail"]
+
+
+def test_features_tbr_sujeito_inexistente(client_filtravel):
+    resp = client_filtravel.get(
+        "/features/tbr",
+        params={"subject_id": "naoexiste", "preproc": "basico"},
+    )
+    assert resp.status_code == 400
+    assert "não encontrado" in resp.json()["detail"]
+
+
+def test_features_tbr_epoca_maior_que_a_gravacao_devolve_erro_claro(client_filtravel):
+    """Época maior que o sinal inteiro não pode devolver zero épocas em
+    silêncio: o app precisa dizer por que não há número nenhum para mostrar."""
+    resp = client_filtravel.get(
+        "/features/tbr",
+        params={"subject_id": "suj1", "preproc": "basico", "duracao_s": 1000.0},
+    )
+    assert resp.status_code == 400
+    assert "época" in resp.json()["detail"]

@@ -68,6 +68,73 @@ def cortes_de_eventos(eventos, fs, valores=("boundary",)):
     return saida
 
 
+def blocos_entre_eventos(eventos, fs, n_amostras, alvos, cortes=()):
+    """[(inicio, fim, valor)] e decisoes: os blocos delimitados por eventos.
+
+    `cortes_de_eventos` CORTA; esta função ANCORA. Um bloco vai do onset de
+    um evento em `alvos` ao onset do PRÓXIMO evento em `alvos`, e carrega o
+    valor do evento que o abriu. É o que permite epocar "olhos fechados" e
+    "olhos abertos" separadamente no RestingState do HBN, em que
+    `instructed_toOpenEyes` e `instructed_toCloseEyes` se alternam.
+
+    Três decisões, todas medidas nos 10 events.tsv do ds005505:
+
+      O ÚLTIMO alvo não fecha bloco. O 6.º `toOpenEyes` cai ~4,5 s antes de
+      um `boundary` ou de um `break cnt`, e a tarefa seguinte começa logo
+      depois; inventar um fim para ele seria epocar o intervalo entre
+      tarefas como se fosse repouso. Ele é contado, não usado.
+
+      Evento fora de `alvos` é ignorado. O sub-NDARAC904DMU carrega 21
+      eventos de seqLearning dentro do arquivo de RestingState; nenhum deles
+      pode abrir nem fechar bloco de repouso.
+
+      `cortes` (boundary, break cnt) recortam o bloco em segmentos
+      contínuos que PRESERVAM o rótulo. A duração declarada é a do bloco
+      inteiro, medida pelo próximo onset, nunca fixada em 20 ou 40 s.
+
+    A saída já é a lista de segmentos que `epocar_janela_fixa` recebe, e o
+    chamador filtra por valor antes de epocar cada condição."""
+    if not fs or fs <= 0:
+        raise ValueError(f"fs tem de ser positiva, recebi {fs!r}")
+    alvo = set(alvos)
+    marcos = []
+    for ev in eventos or ():
+        if ev.get("valor") not in alvo:
+            continue
+        amostra = int(round(float(ev.get("onset", 0.0)) * fs))
+        if 0 <= amostra < int(n_amostras):
+            marcos.append((amostra, ev.get("valor")))
+    marcos.sort(key=lambda m: m[0])
+
+    validos = sorted({int(c) for c in (cortes or ()) if 0 < int(c) < int(n_amostras)})
+
+    blocos = []
+    n_blocos = {}
+    duracoes = {}
+    recortados = 0
+    for (ini, valor), (fim, _) in zip(marcos, marcos[1:]):
+        if fim <= ini:
+            continue
+        bordas = [ini] + [c for c in validos if ini < c < fim] + [fim]
+        if len(bordas) > 2:
+            recortados += 1
+        for a, b in zip(bordas, bordas[1:]):
+            blocos.append((a, b, valor))
+        n_blocos[valor] = n_blocos.get(valor, 0) + 1
+        duracoes.setdefault(valor, []).append((fim - ini) / fs)
+
+    decisoes = {
+        "alvos": list(alvos),
+        "n_blocos_por_valor": n_blocos,
+        "duracao_s_por_valor": duracoes,
+        "blocos_recortados_por_corte": recortados,
+        # o marco que ficou sem par, em segundos: declarado, não inventado
+        "ultimo_alvo_sem_fechamento": (marcos[-1][0] / fs) if marcos else None,
+        "n_marcos": len(marcos),
+    }
+    return blocos, decisoes
+
+
 def segmentos_continuos(n_amostras, cortes):
     """Faixas `[inicio, fim)` que não atravessam nenhum corte.
 

@@ -471,8 +471,12 @@ def test_preprocessar_completo_zera_media_instantanea():
 # conforme ela.
 
 def _raw_com_orelhas(fs=128.0, n_canais=4):
-    """Sinal com dois canais de orelha (A1/A2) alem dos de analise, que e o
-    que o adhdata tem e o HBN nao."""
+    """Sinal sintetico com dois canais de orelha (A1/A2) alem dos de analise.
+
+    Nenhum dos dois bancos do projeto os SERVE: a malha GSN do HBN nao os
+    tem, e os 19 canais do adhdata nao os incluem, embora a referencia
+    declarada dele seja linked-ears. Este helper existe para a base 'orelha'
+    ter teste mesmo sem banco que a ofereca (conferido em 07/09/2026)."""
     raw = _raw_sintetico(fs=fs, n_canais=n_canais)
     dados = raw.get_data()
     nomes = [f"E{i + 1}" for i in range(n_canais)] + ["A1", "A2"]

@@ -22,6 +22,8 @@ from canais import resolver as resolver_canais
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 import eventos
 import preproc_basico
+import epocas as epocas_mod
+import caracteristicas
 
 CSV_PATH = config.CAMINHO_ADHDATA
 
@@ -788,6 +790,103 @@ def _raw_data_bids(meta, dataset_id, subject_id, preproc, base="nativa"):
             "referencia_sem_efeito": decisoes["referencia_sem_efeito"],
         })
     return resposta
+
+
+@app.get("/features/tbr")
+def get_features_tbr(
+    subject_id: str = None,
+    dataset_id: str = "adhdata",
+    preproc: str = "basico",
+    base: str = "nativa",
+    duracao_s: float = 2.0,
+    passo_s: float = 2.0,
+):
+    """TBR (razão theta/beta) média por canal, sobre épocas de janela fixa.
+
+    Reaproveita /raw-data para obter o sinal contínuo já filtrado e
+    re-referenciado — NÃO reimplementa pré-processamento aqui. É a mesma
+    razão de sempre: uma segunda cópia do pipeline é como as duas divergem
+    sem que nada avise (foi assim que a TBR do frontend passou a seguir
+    `TBR_app = 1,396 × TBR_real^0,341` sem denúncia nenhuma).
+
+    A epocagem usa `epocas.epocar_janela_fixa`, que nunca deixa uma janela
+    atravessar descontinuidade. No adhdata não há fronteira a respeitar
+    aqui: `/raw-data` já devolve um único sujeito isolado. No HBN há o
+    evento `boundary` do EEGLAB, presente em 9 dos 10 sujeitos
+    inventariados, e por isso os eventos do sujeito são lidos e convertidos
+    em cortes antes de epocar — pular esse passo reproduziria exatamente o
+    defeito que `epocas.py` existe para impedir.
+
+    `duracao_s`/`passo_s` default para 2,0/2,0 (janelas de 2 s, sem
+    sobreposição): comprida o bastante para conter um ciclo de delta
+    (1 Hz) com folga, curta o bastante para várias épocas mesmo em
+    gravações breves. Não é uma calibração científica — é o ponto de
+    partida que os parâmetros nomeados em `decisoes` deixam auditável e
+    trocável pela URL.
+
+    preproc é restrito a basico/clinico (não "nenhum"): a TBR sobre sinal
+    sem filtro nenhum mistura DC, rede elétrica e artefato no cálculo de
+    banda, que é justamente o que o pré-processamento existe para tirar."""
+    if preproc not in ("basico", "clinico"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"preproc inválido para features: {preproc} (use basico ou clinico)",
+        )
+
+    bruto = get_raw_data(
+        subject_id=subject_id, preproc=preproc, dataset_id=dataset_id, base=base
+    )
+    canais_nomes = list(bruto["channels"].keys())
+    fs = float(bruto["fs"])
+    dado = np.array([bruto["channels"][c] for c in canais_nomes], dtype=float)
+
+    segmentos = None
+    meta = config.DATASETS.get(dataset_id)
+    if meta is not None and meta["tipo"] != "csv":
+        # HBN: os cortes de boundary vêm dos eventos do MESMO sujeito que
+        # /raw-data escolheu (bruto["subject_id"]), não do subject_id pedido
+        # — que pode ter sido None, caso em que /raw-data escolheu o primeiro
+        try:
+            resposta_eventos = get_eventos(dataset_id=dataset_id, subject_id=bruto["subject_id"])
+        except HTTPException:
+            resposta_eventos = {"eventos": []}
+        cortes = epocas_mod.cortes_de_eventos(resposta_eventos.get("eventos", []), fs)
+        segmentos = epocas_mod.segmentos_continuos(dado.shape[1], cortes)
+
+    try:
+        janelas, decisoes_epoca = epocas_mod.epocar_janela_fixa(
+            dado, fs, duracao_s, passo_s, segmentos
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if janelas.shape[0] == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="nenhuma época válida: sinal curto demais ou inteiramente cortado por descontinuidades",
+        )
+
+    tbr, _, decisoes_tbr = caracteristicas.razao_theta_beta(
+        janelas, fs, nomes_canais=canais_nomes, com_decisoes=True
+    )
+
+    # NaN não é JSON válido: um canal sem potência de beta em NENHUMA época
+    # vira null explícito, não um literal NaN que quebra parser estrito.
+    tbr_por_canal = {}
+    for i, c in enumerate(canais_nomes):
+        media = float(np.nanmean(tbr[:, i])) if not np.all(np.isnan(tbr[:, i])) else float("nan")
+        tbr_por_canal[c] = None if np.isnan(media) else media
+
+    return {
+        "subject_id": bruto["subject_id"],
+        "dataset_id": dataset_id,
+        "preproc": preproc,
+        "base": base,
+        "tbr_por_canal": tbr_por_canal,
+        "n_epocas_validas": decisoes_epoca["n_epocas"],
+        "amostras_descartadas": decisoes_epoca["amostras_descartadas"],
+        "decisoes": decisoes_tbr,
+    }
 
 
 class SourceLocalizationRequest(BaseModel):
