@@ -30,3 +30,4 @@ relatorios/
 
 # Capturas de tela de verificação no navegador
 .playwright-mcp/
+*.log
