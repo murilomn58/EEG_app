@@ -61,7 +61,11 @@ def _potencia_de_banda_do_conjunto(df, duracao_s, passo_s, max_sujeitos):
     Repete a montagem em vez de generalizar `montar_conjunto_tbr` com um
     parâmetro de tipo de característica: a montagem é curta, e um parâmetro que
     troca o que é extraído esconderia, numa flag, a diferença entre duas
-    condições do experimento."""
+    condições do experimento.
+
+    Sujeito que falha APARECE, e não some da contagem: a condição B só é
+    comparável com a A se as duas rodarem sobre o mesmo conjunto, e um n que
+    encolhe em silêncio faz a comparação mentir."""
     sujeitos = csv_data.list_subjects(df)
     if max_sujeitos:
         por_classe = {}
@@ -74,6 +78,7 @@ def _potencia_de_banda_do_conjunto(df, duracao_s, passo_s, max_sujeitos):
         sujeitos = escolhidos[:max_sujeitos]
 
     bX, by, bg = [], [], []
+    falhas = []
     for idx, s in enumerate(sujeitos):
         try:
             raw = preproc_basico.raw_de_dataframe(df, s["id"])
@@ -82,6 +87,7 @@ def _potencia_de_banda_do_conjunto(df, duracao_s, passo_s, max_sujeitos):
                 filtrado.get_data() * 1e6, csv_data.FS, duracao_s, passo_s
             )
             if len(janelas) == 0:
+                falhas.append((s["id"], "nenhuma época coube na gravação"))
                 continue
             X, _ = caracteristicas.potencia_de_banda(
                 janelas, csv_data.FS, nomes_canais=list(csv_data.CANAIS_19)
@@ -89,9 +95,9 @@ def _potencia_de_banda_do_conjunto(df, duracao_s, passo_s, max_sujeitos):
             bX.append(X)
             by.append(np.full(len(X), 1 if s["classe"] == "ADHD" else 0))
             bg.append(np.full(len(X), idx))
-        except Exception:                 # noqa: BLE001
-            continue
-    return np.vstack(bX), np.concatenate(by), np.concatenate(bg)
+        except Exception as e:            # noqa: BLE001
+            falhas.append((s["id"], str(e)))
+    return np.vstack(bX), np.concatenate(by), np.concatenate(bg), falhas
 
 
 def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
@@ -118,7 +124,9 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
                        "auc": a["auc"], "acuracia": a["acuracia"],
                        "n_sujeitos": a["n_sujeitos"], "p_empirico": None})
 
-    Xb, yb, gb = _potencia_de_banda_do_conjunto(df, duracao_s, passo_s, max_sujeitos)
+    Xb, yb, gb, falhas_b = _potencia_de_banda_do_conjunto(
+        df, duracao_s, passo_s, max_sujeitos
+    )
     b = classificador.avaliar_loso(
         Xb, yb, gb, n_dobras_internas=n_dobras_internas, semente=semente
     )
@@ -151,6 +159,9 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
 
     dec["avaliacao"] = a["decisoes"]
     dec["nulo"] = d["decisoes"]
+    dec["sujeitos_que_falharam_na_potencia_de_banda"] = [
+        {"id": s, "motivo": m} for s, m in falhas_b
+    ]
     receita = mod_receita.montar(
         banco="adhdata",
         sujeitos=[f"{dec['n_sujeitos_usados']} sujeitos"],

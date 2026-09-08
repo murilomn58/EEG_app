@@ -77,3 +77,21 @@ def test_a_condicao_d_reporta_p_empirico(df_sintetico):
     )
     d = next(r for r in resultados if r["condicao"] == "D")
     assert 0.0 <= d["p_empirico"] <= 1.0
+
+
+def test_a_e_b_rodam_sobre_o_mesmo_conjunto(df_sintetico):
+    """A comparação entre TBR e potência de banda só vale no mesmo n.
+
+    Se um sujeito falhar só numa das duas montagens, as duas condições passam a
+    medir conjuntos diferentes, e a pergunta que a condição B existe para
+    responder — a TBR joga informação fora? — deixa de ter resposta."""
+    resultados, receita = experimento_svm.rodar(
+        df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+        n_permutacoes=3, n_dobras_internas=2, semente=0,
+    )
+    a = next(r for r in resultados if r["condicao"] == "A")
+    b = next(r for r in resultados if r["condicao"] == "B")
+    assert a["n_sujeitos"] == b["n_sujeitos"], (
+        "A e B mediram conjuntos de tamanhos diferentes: a comparação entre "
+        "elas não é válida"
+    )
