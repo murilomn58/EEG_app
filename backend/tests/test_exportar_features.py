@@ -12,17 +12,45 @@ A coluna que carrega essa garantia é `sujeito_id`, e ela tem de trazer o ID
 ORIGINAL do banco, não o índice interno da montagem.
 """
 import csv
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ))
 sys.path.insert(0, str(RAIZ / "scripts"))
 
+import csv_data
 import exportar_features
+
+
+@pytest.fixture
+def df_sintetico():
+    """Dois sujeitos, 40 s cada — o bastante para montar o conjunto TBR.
+
+    Sintético e não amostra do banco real: o CSV real tem 267 MB, e um teste
+    que o lê deixa de ser teste e vira experimento."""
+    rng = np.random.default_rng(0)
+    fs = int(csv_data.FS)
+    n = fs * 40
+    t = np.arange(n) / fs
+    linhas = []
+    for sid, classe in [("s1", "ADHD"), ("s2", "Control")]:
+        amp_theta = 3.0 if classe == "ADHD" else 1.0
+        bloco = {}
+        for c in csv_data.CANAIS_19:
+            sinal = (amp_theta * np.sin(2 * np.pi * 6 * t)
+                     + 1.0 * np.sin(2 * np.pi * 20 * t)
+                     + rng.normal(0, 0.5, n))
+            bloco[c] = sinal
+        bloco["ID"] = sid
+        bloco["Class"] = classe
+        linhas.append(pd.DataFrame(bloco))
+    return pd.concat(linhas, ignore_index=True)
 
 
 def test_csv_traz_o_id_original_do_sujeito(tmp_path):
@@ -93,3 +121,29 @@ def test_recusa_comprimentos_incompativeis(tmp_path):
             indices_epoca=np.array([0, 0]),
             nomes=["Cz_tbr"],
         )
+
+
+def test_cli_grava_csv_e_receita_juntos(monkeypatch, tmp_path, df_sintetico):
+    """O CLI existe para que ninguém gere o CSV sem a receita ao lado.
+
+    Um comando que produz o dado sem a procedência contradiz o propósito do
+    receita.py — este teste tranca que `main()` sempre grava os dois arquivos,
+    não só o CSV."""
+    monkeypatch.setattr(csv_data, "load_csv", lambda caminho: df_sintetico)
+
+    destino = tmp_path / "features.csv"
+    argv = ["exportar_features.py", "--epoca", "4.0", "--passo", "4.0",
+            "--saida", str(destino)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    exportar_features.main()
+
+    receita_path = destino.with_suffix(".receita.json")
+    assert destino.is_file()
+    assert receita_path.is_file()
+
+    linhas = list(csv.DictReader(destino.open(encoding="utf-8")))
+    assert len(linhas) > 0
+
+    receita = json.loads(receita_path.read_text(encoding="utf-8"))
+    assert "licença" in receita["notas"]

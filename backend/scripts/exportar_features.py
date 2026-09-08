@@ -18,7 +18,12 @@ que não permite partição honesta é um convite ao vazamento.
 O rótulo sai como TEXTO (`ADHD` / `Control`) e não como 0/1, porque um código
 numérico exige um dicionário externo para ser lido — e esse dicionário é
 exatamente o que se perde na fronteira entre dois projetos.
+
+Uso:
+    python scripts/exportar_features.py
+    python scripts/exportar_features.py --max-sujeitos 10 --saida dados/features.csv
 """
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -29,9 +34,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import caracteristicas
+import config
 import csv_data
 import epocas as mod_epocas
 import preproc_basico
+import receita as mod_receita
 
 COLUNAS_DE_IDENTIFICACAO = ["sujeito_id", "rotulo", "epoca_idx"]
 
@@ -142,3 +149,46 @@ def montar_conjunto_tbr(df, duracao_s=4.0, passo_s=4.0, max_sujeitos=None):
     return (np.vstack(blocos_X), np.concatenate(blocos_y),
             np.concatenate(blocos_g), np.concatenate(blocos_id),
             np.concatenate(blocos_ep), nomes, decisoes)
+
+
+def main():
+    """CLI: monta o conjunto, grava o CSV e a receita lado a lado.
+
+    Um comando que produz o CSV sem a receita ao lado é o que este módulo
+    existe para evitar — a receita é o que permite a outra pessoa refazer a
+    extração a partir do que o app entrega, não só consumir o número."""
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--epoca", type=float, default=4.0)
+    p.add_argument("--passo", type=float, default=4.0)
+    p.add_argument("--max-sujeitos", type=int, default=None)
+    p.add_argument("--saida", default="dados/features_adhdata_tbr.csv")
+    args = p.parse_args()
+
+    df = csv_data.load_csv(config.CAMINHO_ADHDATA)
+    X, y, grupos, ids_originais, indices_epoca, nomes, dec = montar_conjunto_tbr(
+        df, duracao_s=args.epoca, passo_s=args.passo,
+        max_sujeitos=args.max_sujeitos,
+    )
+
+    escrever_csv(args.saida, X, y, ids_originais, indices_epoca, nomes)
+
+    receita = mod_receita.montar(
+        banco="adhdata",
+        sujeitos=[f"{dec['n_sujeitos_usados']} sujeitos"],
+        etapas=dec,
+        notas=RESSALVA_LICENCA,
+    )
+    mod_receita.salvar(receita, Path(args.saida).with_suffix(".receita.json"))
+
+    print(f"linhas: {len(X)}")
+    print(f"sujeitos usados: {dec['n_sujeitos_usados']}")
+    print(f"características: {len(nomes)}")
+    if dec["sujeitos_que_falharam"]:
+        print("sujeitos que falharam:")
+        for f in dec["sujeitos_que_falharam"]:
+            print(f"  {f['id']}: {f['motivo']}")
+    print(f"\n{RESSALVA_LICENCA}")
+
+
+if __name__ == "__main__":
+    main()
