@@ -147,3 +147,36 @@ def test_cli_grava_csv_e_receita_juntos(monkeypatch, tmp_path, df_sintetico):
 
     receita = json.loads(receita_path.read_text(encoding="utf-8"))
     assert "licença" in receita["notas"]
+
+
+def test_receita_traz_hash_do_csv_e_lista_real_de_sujeitos(
+    monkeypatch, tmp_path, df_sintetico
+):
+    """Duas lacunas de auditoria apontadas por verificação independente.
+
+    (1) O CSV não é versionado — é regerado a partir do comando na receita —,
+    e sem um hash do conteúdo duas pessoas com "o mesmo" arquivo não têm como
+    confirmar que é literalmente o mesmo, só o timestamp `gerado_em`.
+    (2) A receita trazia `["N sujeitos"]`, uma string descritiva, onde cabia a
+    lista real dos IDs: sem ela não dá para comparar duas exportações e ver
+    se algum sujeito sumiu ou apareceu."""
+    monkeypatch.setattr(csv_data, "load_csv", lambda caminho: df_sintetico)
+
+    destino = tmp_path / "features.csv"
+    argv = ["exportar_features.py", "--epoca", "4.0", "--passo", "4.0",
+            "--saida", str(destino)]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    exportar_features.main()
+
+    receita_path = destino.with_suffix(".receita.json")
+    receita = json.loads(receita_path.read_text(encoding="utf-8"))
+
+    hash_esperado = exportar_features.sha256_do_arquivo(destino)
+    assert receita["etapas"]["sha256_do_csv"] == hash_esperado
+    assert receita["etapas"]["arquivo_csv"] == destino.name
+
+    linhas = list(csv.DictReader(destino.open(encoding="utf-8")))
+    ids_no_csv = sorted(set(l["sujeito_id"] for l in linhas))
+    assert receita["sujeitos"] == ids_no_csv
+    assert len(receita["sujeitos"]) == 2

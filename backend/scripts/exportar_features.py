@@ -25,6 +25,7 @@ Uso:
 """
 import argparse
 import csv
+import hashlib
 import sys
 from pathlib import Path
 
@@ -77,6 +78,25 @@ def escrever_csv(caminho, X, y, ids_originais, indices_epoca, nomes):
                 [ids_originais[i], y[i], int(indices_epoca[i])]
                 + [f"{v:.10g}" for v in X[i]]
             )
+
+
+def sha256_do_arquivo(caminho):
+    """Hash sha256 hexadecimal do conteúdo de um arquivo.
+
+    O CSV que este script gera não é versionado (`dados/*` está no
+    `.gitignore` do eeg_transformer, porque dado de EEG é grande demais) —
+    ele é regerado a partir do comando registrado na receita. Sem um hash do
+    conteúdo, duas pessoas com "o mesmo" arquivo não têm como confirmar que é
+    literalmente o mesmo: só há o timestamp `gerado_em`, que prova quando o
+    arquivo foi escrito, não o que há dentro dele.
+
+    Lê em blocos de 64 KB para não carregar o CSV inteiro (pode passar de
+    267 MB) de uma vez na memória."""
+    h = hashlib.sha256()
+    with Path(caminho).open("rb") as f:
+        for bloco in iter(lambda: f.read(65536), b""):
+            h.update(bloco)
+    return h.hexdigest()
 
 
 def montar_conjunto_tbr(df, duracao_s=4.0, passo_s=4.0, max_sujeitos=None):
@@ -172,9 +192,12 @@ def main():
 
     escrever_csv(args.saida, X, y, ids_originais, indices_epoca, nomes)
 
+    dec["sha256_do_csv"] = sha256_do_arquivo(args.saida)
+    dec["arquivo_csv"] = Path(args.saida).name
+
     receita = mod_receita.montar(
         banco="adhdata",
-        sujeitos=[f"{dec['n_sujeitos_usados']} sujeitos"],
+        sujeitos=sorted(set(ids_originais.tolist())),
         etapas=dec,
         notas=RESSALVA_LICENCA,
     )
