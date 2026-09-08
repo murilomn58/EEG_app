@@ -244,8 +244,21 @@ Além dos habituais de contorno, três que existem para impedir defeitos especí
    exigia que os escores dos outros não mudassem. Era inválida: nas dobras dos outros sujeitos,
    aquele sujeito é dado de **treino legítimo**, e mudar o treino muda o modelo. Nenhum pipeline
    correto passaria. Medido: o escore de um sujeito ia de −0,82 para +1,00, com o pipeline certo.
-3. **`test_permutacao_produz_auc_de_acaso`** — com rótulos permutados por sujeito, a AUC média fica
-   próxima de 0,5. Se der muito acima, há vazamento em algum lugar do pipeline.
+3. **`test_nulo_por_permutacao_fica_bem_abaixo_do_sinal`** — com rótulos permutados por sujeito, a
+   AUC nula fica bem abaixo da observada. Se subir, há vazamento em algum lugar do pipeline.
+
+   ⚠️ **Correção de 08/09/2026, medida no ambiente.** A primeira redação exigia AUC nula próxima de
+   0,5. **É falso no LOSO**, e o teste falhava com o código correto. A AUC nula do LOSO tem **viés
+   negativo estrutural**: ao remover o sujeito de teste do treino, o treino fica sistematicamente
+   desbalanceado contra a classe dele, e o modelo aprende a maioria e erra justamente nele. A
+   correlação entre o desbalanceio do treino e o rótulo do sujeito de teste, em 2000 sorteios por
+   tamanho, é −0,071 (n=8), −0,033 (n=16), −0,013 (n=40) e −0,004 (n=121) — escala com 1/n, a
+   assinatura da origem combinatória. Medido nas AUC nulas reais: 0,086 com 8 sujeitos, 0,348 com 16.
+
+   **Isto não invalida o nulo — é a razão de ele existir.** O p-valor empírico compara a AUC
+   observada com a distribuição nula **medida**, seja qual for o centro dela. Comparar com 0,5
+   teórico é que seria errado. Com 121 sujeitos o viés é de −0,004, desprezível, mas o princípio
+   vale: **o ponto de comparação é a nula medida, nunca 0,5**.
 
 Mais um teste de contrato: **`test_csv_tem_sujeito_id_original`** — a coluna `sujeito_id` traz o ID
 do adhdata, não o índice interno. É o que o transformer precisa para refazer o split.
