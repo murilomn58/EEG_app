@@ -1273,9 +1273,23 @@ Esperado: tabela de quatro linhas impressa, sem exceção. Os valores não impor
 - [ ] **Step 2: Rodada completa**
 
 ```
-cd backend && .venv/Scripts/python.exe scripts/experimento_svm.py --permutacoes 100 --saida relatorios/experimento_svm.csv
+cd backend && .venv/Scripts/python.exe scripts/experimento_svm.py --permutacoes 50 --saida relatorios/experimento_svm.csv
 ```
 Esperado: quatro linhas com `n_sujeitos = 121`.
+
+⏱️ **Custo medido em 08/09/2026, e por que são 50 e não 100 permutações.** O LOSO foi
+cronometrado em n=10 (2,5 s) e n=20 (6,3 s); o expoente ajustado é 1,33, porque o SVM é ~O(n²)
+nas amostras e o número de épocas cresce com o de sujeitos. Extrapolado para 121 sujeitos com
+épocas de 4 s, **uma** avaliação LOSO custa ~13,4 min. O nulo roda o LOSO inteiro uma vez por
+permutação, então com 100 permutações ele sozinho leva 22,3 h — 97% de um total de 23 h.
+
+Reduzir a grade do nulo é 8× mais rápido e foi descartado: o **desvio** da distribuição nula
+quase triplica (0,073 → 0,210), e um nulo ruidoso alarga o p-valor, enfraquecendo justamente a
+afirmação que ele existe para sustentar.
+
+Com 50 permutações e a grade cheia, o total cai para ~12 h e o p-valor mínimo passa de 0,010
+para 0,020 — irrelevante dada a expectativa registrada de AUC entre 0,55 e 0,70. **Rode durante
+a noite.** Decisão de Murilo em 08/09/2026, com os números medidos.
 
 ⚠️ **Ao ler o resultado:** AUC entre 0,55 e 0,70 na condição A é o esperado. **AUC acima de 0,90 é suspeita de defeito, não sucesso** — se aparecer, pare e investigue vazamento antes de reportar qualquer coisa.
 

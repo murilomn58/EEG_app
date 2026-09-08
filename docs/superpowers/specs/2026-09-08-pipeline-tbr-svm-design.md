@@ -158,8 +158,14 @@ Um número sozinho não sustenta afirmação. O que este experimento produz é u
 | **D** | TBR (19) | SVM-RBF, rótulos permutados | a AUC medida bate acaso? |
 
 **A condição D é inegociável.** Com 121 sujeitos, uma AUC de 0,62 pode ser sinal fraco ou ruído.
-O nulo por permutação (rótulos embaralhados **respeitando a fronteira de sujeito**, 100 repetições)
-dá a distribuição sob a hipótese nula, e daí o p-valor empírico da AUC observada.
+O nulo por permutação (rótulos embaralhados **respeitando a fronteira de sujeito**, **50**
+repetições) dá a distribuição sob a hipótese nula, e daí o p-valor empírico da AUC observada.
+
+⏱️ **50 e não 100, por custo medido em 08/09/2026.** O nulo roda o LOSO inteiro uma vez por
+permutação: a 13,4 min por avaliação sobre 121 sujeitos, 100 permutações custam 22,3 h, contra
+~12 h com 50. O p-valor mínimo passa de 0,010 para 0,020, sem consequência dada a expectativa de
+AUC entre 0,55 e 0,70. Reduzir a grade do nulo em vez disso foi descartado: acelera 8×, mas
+triplica o desvio da distribuição nula (0,073 → 0,210).
 
 ⚠️ **Atenção de implementação:** permutar rótulo por época destruiria a estrutura de sujeito e
 produziria um nulo otimista demais. A permutação é do rótulo **de cada sujeito**, e todas as épocas
