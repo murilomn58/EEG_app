@@ -95,3 +95,105 @@ def test_a_e_b_rodam_sobre_o_mesmo_conjunto(df_sintetico):
         "A e B mediram conjuntos de tamanhos diferentes: a comparação entre "
         "elas não é válida"
     )
+
+
+def test_a_b_c_tem_ic95_e_d_nao(df_sintetico):
+    """A, B e C reportam erro-padrão e IC95% da AUC (Hanley-McNeil); D não.
+
+    D não tem IC porque o "AUC" ali é a média da distribuição nula por
+    permutação, não uma AUC de classificação normal."""
+    resultados, _ = experimento_svm.rodar(
+        df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+        n_permutacoes=3, n_dobras_internas=2, semente=0,
+    )
+    for cond in ("A", "B", "C"):
+        r = next(x for x in resultados if x["condicao"] == cond)
+        assert isinstance(r["erro_padrao"], float)
+        assert isinstance(r["auc_ic95_inf"], float)
+        assert isinstance(r["auc_ic95_sup"], float)
+        assert r["auc_ic95_inf"] <= r["auc"] <= r["auc_ic95_sup"]
+
+    d = next(x for x in resultados if x["condicao"] == "D")
+    assert d["erro_padrao"] is None
+    assert d["auc_ic95_inf"] is None
+    assert d["auc_ic95_sup"] is None
+
+
+def test_rodar_sem_progresso_nao_imprime(df_sintetico, capsys):
+    """`rodar()` nunca imprime por conta própria, só via callback `progresso`.
+
+    O padrão de `progresso=None` é o que preserva o comportamento de quem já
+    chama `rodar()` sem esse parâmetro — e isso só é verdade se a função for
+    muda quando ninguém pede sinal."""
+    experimento_svm.rodar(
+        df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+        n_permutacoes=2, n_dobras_internas=2, semente=0,
+        progresso=None,
+    )
+
+    capturado = capsys.readouterr()
+    assert capturado.out == ""
+
+
+def test_progresso_anuncia_as_quatro_condicoes(df_sintetico):
+    """A, B, C e D aparecem nas linhas de progresso, na ordem em que rodam.
+
+    Uma rodada de horas sem esse sinal já foi lida, uma vez, como processo
+    travado quando na verdade progredia — é exatamente isso que este teste
+    impede de silenciar de novo."""
+    linhas = []
+
+    experimento_svm.rodar(
+        df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+        n_permutacoes=2, n_dobras_internas=2, semente=0,
+        progresso=linhas.append,
+    )
+
+    texto = "\n".join(linhas)
+    pos_a = texto.find("condição A")
+    pos_b = texto.find("condição B")
+    pos_c = texto.find("condição C")
+    pos_d = texto.find("condição D")
+    assert pos_a != -1 and pos_b != -1 and pos_c != -1 and pos_d != -1, (
+        "nem todas as quatro condições anunciaram progresso"
+    )
+    assert pos_a < pos_b < pos_c < pos_d, (
+        "as condições não apareceram na ordem A, B, C, D"
+    )
+
+
+def test_checkpoint_existe_depois_da_primeira_condicao(df_sintetico, monkeypatch, tmp_path):
+    """O checkpoint tem as linhas de A e B mesmo se C explodir no meio.
+
+    Monkeypatcha `LogisticRegression` (o modelo específico da condição C) para
+    levantar: é o ponto de falha mais robusto, porque não depende de contar
+    chamadas de `avaliar_loso` na ordem certa — só depende de C ser a única
+    condição que usa regressão logística."""
+    import sklearn.linear_model as linear_model_mod
+
+    def _explode(*a, **kw):
+        raise RuntimeError("falha simulada na condição C")
+
+    monkeypatch.setattr(linear_model_mod, "LogisticRegression", _explode)
+    # `experimento_svm.rodar` importa `LogisticRegression` localmente de
+    # `sklearn.linear_model` a cada chamada, então corrigir o atributo no
+    # módulo de origem é suficiente.
+
+    caminho_checkpoint = tmp_path / "checkpoint.csv"
+
+    with pytest.raises(RuntimeError, match="falha simulada na condição C"):
+        experimento_svm.rodar(
+            df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+            n_permutacoes=2, n_dobras_internas=2, semente=0,
+            checkpoint=caminho_checkpoint,
+        )
+
+    assert caminho_checkpoint.exists(), "o checkpoint não foi escrito antes da falha em C"
+    with caminho_checkpoint.open(encoding="utf-8") as f:
+        conteudo = f.read()
+    condicoes_presentes = {
+        linha.split(",")[0] for linha in conteudo.splitlines()[1:] if linha
+    }
+    assert condicoes_presentes == {"A", "B"}, (
+        f"esperava só A e B no checkpoint, achou {condicoes_presentes}"
+    )
