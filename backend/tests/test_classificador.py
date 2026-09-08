@@ -168,11 +168,19 @@ def test_nulo_por_permutacao_fica_bem_abaixo_do_sinal():
 
     A razão é estrutural e não é defeito. Ao tirar o sujeito de teste do
     treino, o treino fica desbalanceado CONTRA a classe dele — sempre, por
-    construção. O modelo aprende a maioria e erra justamente nele. A
+    construção. O modelo aprende a maioria e erra justamente nele.
+
+    Correção de 08/09/2026: uma redação anterior deste docstring media a
     correlação entre o desbalanceio do treino e o rótulo do sujeito de teste
-    foi medida em 2000 sorteios por tamanho: −0,071 com 8 sujeitos, −0,033 com
-    16, −0,013 com 40 e −0,004 com 121. Escala com 1/n, que é a assinatura da
-    origem combinatória.
+    (−0,071 com 8 sujeitos, −0,033 com 16, −0,013 com 40, −0,004 com 121, uma
+    quantidade no espaço dos rótulos) e concluía dali que o viés da AUC era
+    desprezível em n=121. Estava errado: a correlação por dobra escala com
+    1/n; o viés na AUC não, porque atua no mesmo sentido em todas as n dobras
+    e a agregação o soma em vez de cancelá-lo. Medido sob H0 puro: AUC nula de
+    0,000 (n=8), 0,010 (n=16), 0,179 (n=40), 0,384 (n=121) e 0,451 (n=300).
+    Confirmado com o pipeline real sob ruído puro em n=121: AUC nula entre
+    0,311 e 0,364 conforme o cenário. O viés é grande, negativo, e não
+    desaparece com n.
 
     Isto é a razão de o nulo existir, e não um problema dele: o p-valor compara
     a AUC observada com a distribuição nula MEDIDA. Comparar com 0,5 teórico é
@@ -180,7 +188,9 @@ def test_nulo_por_permutacao_fica_bem_abaixo_do_sinal():
 
     O teto de 0,75 continua valendo e é o que pega vazamento: se o pipeline
     vazasse, a AUC nula subiria, porque o modelo reconheceria o sujeito em vez
-    do rótulo."""
+    do rótulo. Não há piso de propósito: a nula do LOSO pode legitimamente
+    chegar perto de 0,0 — foi medido 0,0 exato em n=121 com 30 épocas por
+    sujeito."""
     X, y, g = conjunto_separavel(n_sujeitos=8)
 
     r = classificador.nulo_por_permutacao(
@@ -197,3 +207,97 @@ def test_nulo_por_permutacao_fica_bem_abaixo_do_sinal():
         "sintético deveria bater a permutação"
     )
     assert 0.0 <= r["p_empirico"] <= 1.0
+
+
+def test_progresso_nao_vaza_para_avaliar_loso():
+    """`progresso` e `checkpoint` são parâmetros nomeados de `nulo_por_permutacao`,
+    extraídos ANTES de repassar `**kw` para `avaliar_loso`.
+
+    `avaliar_loso` não conhece esses dois nomes. Se vazarem dentro do `**kw`
+    repassado nas chamadas internas, o resultado é um `TypeError` em produção,
+    que só aparece no dia em que alguém finalmente passa `progresso=` — ou
+    seja, no pior momento possível: no meio de uma rodada de horas."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+
+    r = classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=2, n_dobras_internas=2, semente=0,
+        progresso=lambda t: None,
+    )
+
+    assert 0.0 <= r["p_empirico"] <= 1.0
+
+
+def test_retomada_reproduz_a_rodada_continua(tmp_path):
+    """Retomar do índice k e continuar até n produz as MESMAS n permutações
+    que uma execução contínua, porque cada permutação usa
+    `semente=semente + i + 1` — função pura do índice, sem estado
+    compartilhado entre iterações. Se essa propriedade for quebrada (por
+    exemplo trocando por um `np.random.default_rng` único reaproveitado ao
+    longo do laço), a retomada deixa de bater com a rodada contínua, e
+    ninguém percebe até comparar as duas."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+
+    continua = classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=4, n_dobras_internas=2, semente=0,
+    )
+
+    caminho = tmp_path / "x.json"
+    classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=2, n_dobras_internas=2, semente=0,
+        checkpoint=caminho,
+    )
+    retomada = classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=4, n_dobras_internas=2, semente=0,
+        checkpoint=caminho, retomar=True,
+    )
+
+    np.testing.assert_allclose(
+        retomada["aucs_nulas"], continua["aucs_nulas"], atol=1e-12
+    )
+
+
+def test_retomada_recusa_semente_diferente(tmp_path):
+    """Misturar dois nulos de sementes diferentes produz uma distribuição sem
+    procedência. Recusar é a única opção correta: não há como "aproveitar
+    parcialmente" um checkpoint cuja semente diverge da chamada atual."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+    caminho = tmp_path / "x.json"
+
+    classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=2, n_dobras_internas=2, semente=0,
+        checkpoint=caminho,
+    )
+
+    with pytest.raises(ValueError):
+        classificador.nulo_por_permutacao(
+            X, y, g, n_permutacoes=4, n_dobras_internas=2, semente=7,
+            checkpoint=caminho, retomar=True,
+        )
+
+
+def test_progresso_do_nulo_conta_as_permutacoes():
+    """Cada permutação concluída emite uma linha numerada, para que uma rodada
+    de horas mostre progresso em vez de silêncio total."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+    linhas = []
+
+    classificador.nulo_por_permutacao(
+        X, y, g, n_permutacoes=3, n_dobras_internas=2, semente=0,
+        progresso=linhas.append,
+    )
+
+    for i in range(1, 4):
+        assert any(f"{i}/3" in linha for linha in linhas), (
+            f"nenhuma linha de progresso menciona a permutação {i}/3"
+        )
+
+
+def test_nulo_recusa_zero_permutacoes():
+    """n_permutacoes=0 produziria uma média sobre lista vazia — nan — em vez de
+    um erro claro. `--sem-nulo` é o caminho certo para pular a condição D."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+
+    with pytest.raises(ValueError):
+        classificador.nulo_por_permutacao(
+            X, y, g, n_permutacoes=0, n_dobras_internas=2, semente=0,
+        )

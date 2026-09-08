@@ -514,6 +514,13 @@ def test_nulo_por_permutacao_fica_bem_abaixo_do_sinal():
     16, −0,013 com 40 e −0,004 com 121. Escala com 1/n, que é a assinatura da
     origem combinatória.
 
+    Nota de 08/09/2026: esta tabela mede a correlação por dobra, no espaço dos
+    rótulos, e ela de fato escala com 1/n. Ela NÃO é o viés da AUC. O viés da
+    AUC foi medido separadamente e não escala assim, porque é sistemático nas
+    n dobras e a agregação o soma em vez de cancelá-lo. Ver a seção 9 do spec
+    (`2026-09-08-pipeline-tbr-svm-design.md`) para a correção completa e os
+    números certos.
+
     Isto é a razão de o nulo existir, e não um problema dele: o p-valor compara
     a AUC observada com a distribuição nula MEDIDA. Comparar com 0,5 teórico é
     que seria errado.

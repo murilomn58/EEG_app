@@ -261,10 +261,38 @@ Além dos habituais de contorno, três que existem para impedir defeitos especí
    tamanho, é −0,071 (n=8), −0,033 (n=16), −0,013 (n=40) e −0,004 (n=121) — escala com 1/n, a
    assinatura da origem combinatória. Medido nas AUC nulas reais: 0,086 com 8 sujeitos, 0,348 com 16.
 
-   **Isto não invalida o nulo — é a razão de ele existir.** O p-valor empírico compara a AUC
-   observada com a distribuição nula **medida**, seja qual for o centro dela. Comparar com 0,5
-   teórico é que seria errado. Com 121 sujeitos o viés é de −0,004, desprezível, mas o princípio
-   vale: **o ponto de comparação é a nula medida, nunca 0,5**.
+   ⚠️ **Segunda correção, de 08/09/2026, sobre a frase anterior deste mesmo parágrafo.** A redação
+   que fechava este item dizia "com 121 sujeitos o viés é de −0,004, desprezível". Estava errada, e
+   a verificação independente do dia 08/09/2026 confirmou o erro.
+
+   O engano: mediu-se a correlação entre o desbalanceio do treino e o rótulo do sujeito de teste,
+   uma quantidade no **espaço dos rótulos**, e concluiu-se algo sobre o **viés da AUC**, que é
+   estatística de ordenação sobre os escores. São grandezas diferentes. A correlação por dobra
+   escala com 1/n; o viés na AUC não, porque atua no mesmo sentido em todas as n dobras e a
+   agregação o soma em vez de cancelá-lo.
+
+   Números medidos, sob H0 puro (rótulos sem relação com o sinal), com um modelo que só enxerga a
+   prevalência do treino:
+
+   | n | AUC nula |
+   |---|---|
+   | 8 | 0,000 |
+   | 16 | 0,010 |
+   | 40 | 0,179 |
+   | 121 | 0,384 |
+   | 300 | 0,451 |
+
+   Confirmado de forma independente com o pipeline SVM real sob ruído puro em n=121: AUC nula entre
+   0,311 e 0,364 conforme o cenário, chegando a 0,0 exato numa repetição com 30 épocas por sujeito.
+
+   A conclusão correta é o oposto da anterior: o viés é grande, é negativo, e **não** desaparece com
+   n.
+
+   Isto não invalida o método do nulo por permutação, é a razão dele existir. O p-valor empírico
+   compara a AUC observada com a distribuição nula **medida**, nunca com 0,5 teórico. Comparar com
+   0,5 é que seria o erro, e um erro que muda a leitura do resultado numa direção específica: a
+   correção torna o resultado deste trabalho **mais forte**, não mais fraco. Uma AUC observada de
+   0,55 parece medíocre contra 0,5; é substancial contra uma nula medida de 0,35 a 0,38.
 
 Mais um teste de contrato: **`test_csv_tem_sujeito_id_original`** — a coluna `sujeito_id` traz o ID
 do adhdata, não o índice interno. É o que o transformer precisa para refazer o split.
