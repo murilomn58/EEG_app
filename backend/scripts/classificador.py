@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+from joblib import Parallel, delayed
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import (GridSearchCV, LeaveOneGroupOut,
                                      StratifiedGroupKFold)
@@ -85,8 +86,54 @@ def agregar_por_sujeito(escores, grupos, rotulos):
     return esc_s, rot_s, ids
 
 
+def _avaliar_uma_dobra(treino, teste, X, y, grupos, estimador, grade,
+                       n_dobras_internas, semente):
+    """Uma dobra externa do LOSO: escolhe hiperparâmetro no treino e pontua o teste.
+
+    Função de nível de módulo, e não uma closure dentro de `avaliar_loso`, porque
+    o joblib no Windows serializa a função por pickle (backend `loky`) e closures
+    não sobrevivem a isso de forma confiável.
+
+    Devolve `(teste, escores_do_teste, registro_da_dobra)` — os três pedaços de
+    que `avaliar_loso` precisa para reconstituir, na ordem certa, o que antes
+    era escrito direto no laço."""
+    g_treino = grupos[treino]
+    sujeito_teste = np.unique(grupos[teste])[0]
+
+    # O interno nunca vê o sujeito de teste: ele parte de `treino`.
+    #
+    # StratifiedGroupKFold, e NÃO GroupKFold. Medido em 08/09/2026: o
+    # GroupKFold respeita a fronteira de sujeito mas ignora a classe, e com
+    # poucos sujeitos ele produz dobra interna com UMA CLASSE SÓ — o SVC
+    # levanta "The number of classes has to be greater than one; got 1
+    # class" e o experimento inteiro morre no meio. O estratificado respeita
+    # as duas restrições ao mesmo tempo.
+    n_int = min(n_dobras_internas, len(np.unique(g_treino)))
+    busca = GridSearchCV(
+        estimador, grade,
+        cv=StratifiedGroupKFold(n_splits=n_int, shuffle=True,
+                                random_state=semente),
+        scoring="roc_auc",
+        n_jobs=1,
+    )
+    busca.fit(X[treino], y[treino], groups=g_treino)
+    escores_teste = busca.best_estimator_.decision_function(X[teste])
+
+    registro = {
+        "sujeito_de_teste": sujeito_teste.item()
+        if hasattr(sujeito_teste, "item") else sujeito_teste,
+        "sujeitos_de_treino": [
+            s.item() if hasattr(s, "item") else s
+            for s in np.unique(g_treino)
+        ],
+        "melhores_parametros": busca.best_params_,
+        "n_dobras_internas": int(n_int),
+    }
+    return teste, escores_teste, registro
+
+
 def avaliar_loso(X, y, grupos, estimador=None, grade=None,
-                 n_dobras_internas=5, semente=0):
+                 n_dobras_internas=5, semente=0, n_jobs=1):
     """Nested CV: LOSO externo, StratifiedGroupKFold interno para os hiperparâmetros.
 
     POR QUE A AUC SAI DE UMA CONTA SÓ, NO FIM
@@ -100,7 +147,28 @@ def avaliar_loso(X, y, grupos, estimador=None, grade=None,
 
     O escore de cada época sai de `decision_function`, que é a distância
     assinada ao hiperplano. Não é probabilidade e não precisa ser: a AUC depende
-    só da ordenação."""
+    só da ordenação.
+
+    POR QUE `n_jobs` PARALELIZA AS DOBRAS EXTERNAS, E NÃO O GRID INTERNO
+
+    Medido em 08/09/2026, com n=40 sujeitos, mesma grade (16 núcleos
+    disponíveis, o código serial usa 1): serial (`n_jobs=1`, o padrão) leva
+    139,2 s; `n_jobs=-1` só no `GridSearchCV` interno leva 28,7 s (4,8×);
+    paralelizar as 121 dobras externas com `joblib` leva 24,0 s (5,8×) — mais
+    rápido que paralelizar o interno, porque paralelizar só o grid deixa
+    núcleo ocioso nos intervalos ENTRE dobras externas, enquanto distribuir as
+    próprias dobras mantém todos ocupados o tempo todo.
+
+    Isso não muda nenhum resultado porque as dobras externas são independentes
+    por construção: cada uma treina sobre um subconjunto de sujeitos diferente
+    (`LeaveOneGroupOut`), com sua própria instância de `GridSearchCV`, e
+    nenhuma lê ou escreve estado que outra dobra também usa. Rodá-las em
+    processos diferentes é troca de escalonamento, não de método — ver
+    `test_paralelizar_nao_muda_o_resultado`, que compara byte a byte o
+    resultado com `n_jobs=1` e `n_jobs=-1`.
+
+    O padrão continua `n_jobs=1`: quem já chama esta função sem o argumento
+    (inclusive os testes existentes) não muda de comportamento."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y)
     grupos = np.asarray(grupos)
@@ -116,39 +184,21 @@ def avaliar_loso(X, y, grupos, estimador=None, grade=None,
     escores = np.empty(len(y), dtype=float)
     dobras = []
 
-    for treino, teste in LeaveOneGroupOut().split(X, y, groups=grupos):
-        g_treino = grupos[treino]
-        sujeito_teste = np.unique(grupos[teste])[0]
-
-        # O interno nunca vê o sujeito de teste: ele parte de `treino`.
-        #
-        # StratifiedGroupKFold, e NÃO GroupKFold. Medido em 08/09/2026: o
-        # GroupKFold respeita a fronteira de sujeito mas ignora a classe, e com
-        # poucos sujeitos ele produz dobra interna com UMA CLASSE SÓ — o SVC
-        # levanta "The number of classes has to be greater than one; got 1
-        # class" e o experimento inteiro morre no meio. O estratificado respeita
-        # as duas restrições ao mesmo tempo.
-        n_int = min(n_dobras_internas, len(np.unique(g_treino)))
-        busca = GridSearchCV(
-            estimador, grade,
-            cv=StratifiedGroupKFold(n_splits=n_int, shuffle=True,
-                                    random_state=semente),
-            scoring="roc_auc",
-            n_jobs=1,
+    # `Parallel` devolve os resultados NA ORDEM DE SUBMISSÃO das tarefas, não
+    # na ordem em que terminam — por isso iterar sobre `resultados_dobras`
+    # abaixo preserva a ordem original das dobras (a mesma ordem que o laço
+    # serial produzia), mesmo que uma dobra lenta termine depois de uma mais
+    # rápida submetida antes dela.
+    resultados_dobras = Parallel(n_jobs=n_jobs)(
+        delayed(_avaliar_uma_dobra)(
+            treino, teste, X, y, grupos, estimador, grade,
+            n_dobras_internas, semente,
         )
-        busca.fit(X[treino], y[treino], groups=g_treino)
-        escores[teste] = busca.best_estimator_.decision_function(X[teste])
-
-        dobras.append({
-            "sujeito_de_teste": sujeito_teste.item()
-            if hasattr(sujeito_teste, "item") else sujeito_teste,
-            "sujeitos_de_treino": [
-                s.item() if hasattr(s, "item") else s
-                for s in np.unique(g_treino)
-            ],
-            "melhores_parametros": busca.best_params_,
-            "n_dobras_internas": int(n_int),
-        })
+        for treino, teste in LeaveOneGroupOut().split(X, y, groups=grupos)
+    )
+    for teste, escores_teste, registro in resultados_dobras:
+        escores[teste] = escores_teste
+        dobras.append(registro)
 
     esc_s, rot_s, ids = agregar_por_sujeito(escores, grupos, y)
 

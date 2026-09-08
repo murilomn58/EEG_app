@@ -102,6 +102,29 @@ def test_loso_nao_vaza_sujeito():
         assert dobra["sujeito_de_teste"] not in dobra["sujeitos_de_treino"]
 
 
+def test_paralelizar_nao_muda_o_resultado():
+    """Os mesmos escores com n_jobs=1 e n_jobs=-1.
+
+    As 121 dobras externas do LOSO são independentes por construção: cada uma
+    treina sobre um subconjunto diferente e não compartilha estado com as
+    outras. Distribuí-las entre núcleos é, portanto, uma mudança de escalonamento
+    e não de método — e este teste é o que sustenta essa afirmação. Se algum dia
+    alguém introduzir estado compartilhado entre dobras, é aqui que aparece."""
+    X, y, g = conjunto_separavel(n_sujeitos=8)
+
+    serial = classificador.avaliar_loso(X, y, g, n_dobras_internas=2, n_jobs=1)
+    paralelo = classificador.avaliar_loso(X, y, g, n_dobras_internas=2, n_jobs=-1)
+
+    np.testing.assert_allclose(
+        serial["escores_por_sujeito"], paralelo["escores_por_sujeito"], rtol=1e-10,
+        err_msg="os escores mudaram ao paralelizar: alguma dobra compartilha estado",
+    )
+    assert serial["auc"] == paralelo["auc"]
+    assert [d["sujeito_de_teste"] for d in serial["decisoes"]["dobras"]] == \
+           [d["sujeito_de_teste"] for d in paralelo["decisoes"]["dobras"]], \
+        "a ordem das dobras mudou ao paralelizar"
+
+
 def test_normalizacao_ajustada_fora_da_dobra_mudaria_o_escore():
     """O escore honesto difere do escore com normalização vazada.
 

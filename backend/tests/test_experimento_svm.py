@@ -69,6 +69,30 @@ def test_rodar_produz_as_quatro_condicoes(df_sintetico):
     assert "licença" in receita["notas"]
 
 
+def test_paralelizar_nao_muda_as_aucs_das_quatro_condicoes(df_sintetico):
+    """`rodar(..., n_jobs=1)` e `rodar(..., n_jobs=-1)` produzem as mesmas AUCs
+    nas quatro condições — a mesma garantia de `test_paralelizar_nao_muda_o_
+    resultado` em `test_classificador.py`, mas de ponta a ponta pelo caminho
+    real do CLI, que é quem de fato propaga `n_jobs` até `avaliar_loso` e
+    `nulo_por_permutacao`."""
+    serial, _ = experimento_svm.rodar(
+        df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+        n_permutacoes=2, n_dobras_internas=2, semente=0, n_jobs=1,
+    )
+    paralelo, _ = experimento_svm.rodar(
+        df=df_sintetico, duracao_s=4.0, passo_s=4.0,
+        n_permutacoes=2, n_dobras_internas=2, semente=0, n_jobs=-1,
+    )
+
+    aucs_serial = {r["condicao"]: r["auc"] for r in serial}
+    aucs_paralelo = {r["condicao"]: r["auc"] for r in paralelo}
+    assert aucs_serial.keys() == {"A", "B", "C", "D"}
+    for condicao in aucs_serial:
+        assert aucs_serial[condicao] == pytest.approx(aucs_paralelo[condicao]), (
+            f"condição {condicao}: AUC mudou entre n_jobs=1 e n_jobs=-1"
+        )
+
+
 def test_a_condicao_d_reporta_p_empirico(df_sintetico):
     """O nulo sem p-valor é um histograma, não um teste."""
     resultados, _ = experimento_svm.rodar(

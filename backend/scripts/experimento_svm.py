@@ -34,6 +34,7 @@ suspeita de defeito, e investigada antes de reportada.
 Uso:
     python scripts/experimento_svm.py
     python scripts/experimento_svm.py --max-sujeitos 10 --permutacoes 10
+    python scripts/experimento_svm.py --n-jobs 4   # limita núcleos; padrão -1 (todos)
 """
 import argparse
 import csv
@@ -132,7 +133,7 @@ def _ic_da_condicao(resultado):
 def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
           n_permutacoes=100, n_dobras_internas=5, semente=0,
           progresso=None, checkpoint=None, retomar_nulo=False,
-          pular_nulo=False):
+          pular_nulo=False, n_jobs=1):
     """As quatro condições, e a receita para refazê-las.
 
     POR QUE PROGRESSO E CHECKPOINT AQUI, E NÃO SÓ NO NULO
@@ -143,7 +144,14 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
     quando na verdade progredia. `progresso`, se não `None`, anuncia o início
     e o fim de cada condição; `checkpoint`, se não `None`, grava o CSV das
     condições já concluídas depois de cada uma, para que matar o processo no
-    meio não jogue fora o que já rodou."""
+    meio não jogue fora o que já rodou.
+
+    `n_jobs` propaga para as quatro chamadas de `avaliar_loso` (via `A`, `B`,
+    `C` diretamente, e via `D` dentro de `nulo_por_permutacao`, que repassa
+    por `**kw`). O padrão aqui também é `1`, pela mesma razão de
+    `avaliar_loso`: não mudar o comportamento de quem já chama `rodar()` sem
+    esse argumento. Quem quer velocidade real usa o `--n-jobs` do CLI, cujo
+    padrão é `-1`."""
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import StandardScaler
@@ -175,7 +183,8 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
         )
     t0 = _agora_monotonica()
     a = classificador.avaliar_loso(
-        Xt, yt, gt, n_dobras_internas=n_dobras_internas, semente=semente
+        Xt, yt, gt, n_dobras_internas=n_dobras_internas, semente=semente,
+        n_jobs=n_jobs,
     )
     erro_padrao_a, ic_inf_a, ic_sup_a = _ic_da_condicao(a)
     resultados.append({"condicao": "A", "features": "TBR (19)", "modelo": "SVM-RBF",
@@ -203,7 +212,8 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
         for sid, motivo in falhas_b:
             progresso(f"FALHOU {sid}: {motivo}")
     b = classificador.avaliar_loso(
-        Xb, yb, gb, n_dobras_internas=n_dobras_internas, semente=semente
+        Xb, yb, gb, n_dobras_internas=n_dobras_internas, semente=semente,
+        n_jobs=n_jobs,
     )
     erro_padrao_b, ic_inf_b, ic_sup_b = _ic_da_condicao(b)
     resultados.append({"condicao": "B", "features": "potência de banda (95)",
@@ -230,7 +240,7 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
                                                   random_state=semente))])
     c = classificador.avaliar_loso(
         Xt, yt, gt, estimador=logreg, grade={"clf__C": [0.1, 1.0, 10.0]},
-        n_dobras_internas=n_dobras_internas, semente=semente,
+        n_dobras_internas=n_dobras_internas, semente=semente, n_jobs=n_jobs,
     )
     erro_padrao_c, ic_inf_c, ic_sup_c = _ic_da_condicao(c)
     resultados.append({"condicao": "C", "features": "TBR (19)",
@@ -267,7 +277,7 @@ def rodar(df=None, duracao_s=4.0, passo_s=4.0, max_sujeitos=None,
             Xt, yt, gt, n_permutacoes=n_permutacoes,
             n_dobras_internas=n_dobras_internas, semente=semente,
             progresso=progresso, checkpoint=checkpoint_nulo,
-            retomar=retomar_nulo,
+            retomar=retomar_nulo, n_jobs=n_jobs,
         )
         resultados.append({"condicao": "D", "features": "TBR (19)",
                            "modelo": "SVM-RBF, rótulos permutados",
@@ -336,6 +346,13 @@ def main():
     p.add_argument("--sem-nulo", action="store_true",
                    help="pula a condição D inteira; o resultado sai sem "
                         "p-valor")
+    # Padrão -1 aqui, e não 1 como em `rodar()`/`avaliar_loso`: quem chama a
+    # função de código quer o comportamento antigo por padrão (nenhum teste
+    # existente passa `n_jobs`), mas quem roda da linha de comando está aqui
+    # justamente para uma rodada real e quer todos os núcleos por padrão.
+    p.add_argument("--n-jobs", type=int, default=-1,
+                   help="núcleos para as dobras externas do LOSO (padrão -1: "
+                        "todos os núcleos disponíveis)")
     args = p.parse_args()
 
     def diga(t):
@@ -349,6 +366,7 @@ def main():
         checkpoint=args.saida,
         retomar_nulo=args.retomar,
         pular_nulo=args.sem_nulo,
+        n_jobs=args.n_jobs,
     )
     salvar_csv(resultados, args.saida)
     mod_receita.salvar(receita, Path(args.saida).with_suffix(".receita.json"))
