@@ -11,6 +11,11 @@ Aqui é a MEDIANA. O adhdata tem sujeitos com 62 s e sujeitos com 338 s de
 gravação — uma razão de 5,4 —, e a média deixaria uma única época contaminada
 por artefato deslocar o escore de um sujeito inteiro. A mediana não.
 """
+import json
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import numpy as np
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import (GridSearchCV, LeaveOneGroupOut,
@@ -203,20 +208,125 @@ def permutar_rotulos_por_sujeito(y, grupos, semente=0):
     return saida
 
 
-def nulo_por_permutacao(X, y, grupos, n_permutacoes=100, semente=0, **kw):
+def nulo_por_permutacao(X, y, grupos, n_permutacoes=100, semente=0,
+                        progresso=None, checkpoint=None, retomar=False, **kw):
     """AUC observada, distribuição sob o nulo e p-valor empírico.
 
     O p-valor usa a correção de Phipson e Smyth (2010), `(b + 1) / (m + 1)`:
     com m permutações, um p-valor de zero é impossível de sustentar, e o
     estimador ingênuo `b / m` produz exatamente isso quando nenhuma permutação
-    supera a observação."""
+    supera a observação.
+
+    POR QUE ESTA FUNÇÃO PRECISA DE PROGRESSO E CHECKPOINT
+
+    Cada permutação é uma avaliação LOSO completa — minutos, não segundos —, e
+    com `n_permutacoes=100` a rodada inteira leva horas sem imprimir nada e
+    sem salvar nada até o fim. Isso já causou diagnóstico errado: um processo
+    que progride normalmente foi lido como travado por falta de sinal
+    externo. `progresso` (um chamável `f(texto)`) e `checkpoint` (um caminho
+    de JSON) existem para que a rodada seja observável e retomável sem mudar
+    o resultado matemático de quem não usa nenhum dos dois — por isso os dois
+    são `None` por padrão e nada muda para quem já chama esta função sem
+    eles.
+
+    `progresso` e `checkpoint` são extraídos como parâmetros NOMEADOS, antes
+    de `**kw` seguir para `avaliar_loso`. `avaliar_loso` não conhece esses
+    dois nomes: se vazassem dentro do `**kw` repassado adiante, o resultado
+    seria um `TypeError` que só aparece no dia em que alguém finalmente passa
+    `progresso=` — no pior momento possível, no meio de uma rodada de horas.
+
+    POR QUE A RETOMADA É MATEMATICAMENTE CORRETA
+
+    Cada permutação usa `semente=semente + i + 1`: função pura do índice `i`,
+    sem estado compartilhado entre iterações. Retomar do índice k e continuar
+    até n produz EXATAMENTE as mesmas n permutações que uma execução contínua
+    produziria. Isso deixaria de valer se a fonte de aleatoriedade virasse
+    algo com estado (um único `np.random.default_rng` reaproveitado entre
+    iterações, por exemplo) — por isso o laço abaixo constrói a semente de
+    cada permutação a partir do índice, nunca de um gerador que carrega
+    memória de uma iteração para a próxima."""
+    if n_permutacoes < 1:
+        raise ValueError(
+            f"n_permutacoes={n_permutacoes} produziria uma média sobre lista "
+            "vazia (nan). Para pular a condição do nulo, use --sem-nulo em "
+            "vez de --permutacoes 0."
+        )
+
+    caminho_checkpoint = Path(checkpoint) if checkpoint is not None else None
+
     r_obs = avaliar_loso(X, y, grupos, semente=semente, **kw)
     auc_obs = r_obs["auc"]
 
-    aucs = []
-    for i in range(n_permutacoes):
+    if progresso is not None:
+        progresso(
+            f"permutação 0/{n_permutacoes} | AUC observada {auc_obs:.3f} | "
+            "avaliação de referência concluída"
+        )
+
+    aucs_salvas = []
+    inicio_laco = 0
+
+    if retomar and caminho_checkpoint is not None and caminho_checkpoint.exists():
+        with caminho_checkpoint.open("r", encoding="utf-8") as f:
+            estado = json.load(f)
+
+        if estado.get("semente") != semente:
+            raise ValueError(
+                f"checkpoint tem semente={estado.get('semente')!r}, a chamada "
+                f"atual pede semente={semente!r}: retomar misturaria dois "
+                "nulos de sementes diferentes, o que produz uma distribuição "
+                "sem procedência"
+            )
+        aucs_salvas = list(estado["aucs_nulas"])
+
+        # Continuar para um n_permutacoes MAIOR que o do checkpoint é o uso
+        # normal da retomada — é assim que uma rodada interrompida em 2 de
+        # 100 volta a rodar até 100. O que não faz sentido, e por isso é
+        # recusado, é o checkpoint já ter MAIS permutações computadas do que
+        # a chamada atual pede: aceitar isso exigiria truncar a lista salva,
+        # e uma distribuição truncada às cegas não tem a mesma procedência de
+        # uma gerada com aquele n_permutacoes desde o início.
+        if len(aucs_salvas) > n_permutacoes:
+            raise ValueError(
+                f"checkpoint já tem {len(aucs_salvas)} permutações computadas, "
+                f"a chamada atual pede apenas n_permutacoes={n_permutacoes!r}: "
+                "retomar exigiria truncar o checkpoint, o que produz uma "
+                "distribuição sem a mesma procedência"
+            )
+
+        inicio_laco = len(aucs_salvas)
+
+    aucs = list(aucs_salvas)
+    tempos = []
+
+    for i in range(inicio_laco, n_permutacoes):
+        t0 = time.time()
         yp = permutar_rotulos_por_sujeito(y, grupos, semente=semente + i + 1)
-        aucs.append(avaliar_loso(X, yp, grupos, semente=semente, **kw)["auc"])
+        auc_i = avaliar_loso(X, yp, grupos, semente=semente, **kw)["auc"]
+        aucs.append(auc_i)
+        dt = time.time() - t0
+        tempos.append(dt)
+
+        if progresso is not None:
+            media_ate_aqui = float(np.mean(aucs))
+            tempo_medio = float(np.mean(tempos))
+            restantes = n_permutacoes - (i + 1)
+            fim_estimado = datetime.now() + timedelta(seconds=tempo_medio * restantes)
+            progresso(
+                f"permutação {i + 1}/{n_permutacoes} | AUC nula {auc_i:.3f} | "
+                f"média até aqui {media_ate_aqui:.3f} | {dt:.1f}s | "
+                f"fim estimado {fim_estimado:%H}:{fim_estimado:%M}"
+            )
+
+        if caminho_checkpoint is not None:
+            with caminho_checkpoint.open("w", encoding="utf-8") as f:
+                json.dump({
+                    "semente": semente,
+                    "n_permutacoes": n_permutacoes,
+                    "auc_observada": auc_obs,
+                    "aucs_nulas": aucs,
+                }, f)
+
     aucs = np.array(aucs, dtype=float)
 
     b = int(np.sum(aucs >= auc_obs))
