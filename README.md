@@ -17,6 +17,24 @@ The sensor view interpolates electrode measurements. Source reconstruction uses 
 
 ![Cortical source reconstruction](docs/images/shot-06-source-reconstruction.png)
 
+## Repository layout
+
+```text
+assets/                  Application assets
+backend/                 API, EEG processing and tests
+docs/
+  images/                Documentation screenshots and image index
+    hbn/                 HBN recording views
+    med/                 Signal, filter and source exploration
+    wizard/              Import wizard steps
+  superpowers/           Design notes and implementation plans
+  technical-reference.md Processing details and scientific references
+eeg-cerebro-3d.html       Browser interface
+iniciar.py               Local launcher
+```
+
+Browse the [screenshot index](docs/images/README.md) for the interface captures. Runtime assets are kept separate from documentation images.
+
 ## Run locally
 
 Requirements: Python 3.11 or later and a browser with WebGL. The 3D viewer loads dependencies from public CDNs; the anatomical template may require a separate download on first use.
